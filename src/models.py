@@ -117,6 +117,10 @@ class PromptEndpoint(BaseModel):
         description="Names of connectors this endpoint needs access to",
     )
 
+    # Performance
+    cache_ttl: float = 0  # seconds, 0 = no caching
+    streaming: bool = False  # enable SSE streaming
+
     # Middleware / guards
     auth_required: bool = False
     rate_limit: str | None = None  # e.g. "10/minute"
@@ -160,6 +164,22 @@ class LLMConfig(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class CacheConfig(BaseModel):
+    """Response caching settings."""
+    enabled: bool = True
+    max_size: int = 1000
+    default_ttl: float = 300  # seconds
+
+
+class PerformanceConfig(BaseModel):
+    """Performance tuning settings."""
+    parallel_tool_calls: bool = True
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_recovery: float = 30.0
+    llm_timeout: float = 60.0  # per-call timeout in seconds
+
+
 class AppConfig(BaseModel):
     """Top-level application configuration."""
     app_name: str = "Catalyst"
@@ -169,5 +189,7 @@ class AppConfig(BaseModel):
     prompts_dir: str = "prompts"
     connectors: list[ConnectorConfig] = Field(default_factory=list)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
+    performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
     log_level: str = "INFO"

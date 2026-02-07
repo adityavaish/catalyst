@@ -15,14 +15,17 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.responses import StreamingResponse
 
+from src.cache import ResponseCache
+from src.circuit_breaker import CircuitBreaker
 from src.connectors import ConnectorRegistry
-from src.engine import process_request
+from src.engine import process_request, process_request_streaming
 from src.models import (
-    AppConfig,
     CatalystRequest,
     HttpMethod,
     LLMConfig,
+    PerformanceConfig,
     PromptEndpoint,
 )
 
@@ -37,6 +40,9 @@ def create_router(
     endpoints: list[PromptEndpoint],
     llm_config: LLMConfig,
     connector_registry: ConnectorRegistry,
+    cache: ResponseCache | None = None,
+    circuit_breaker: CircuitBreaker | None = None,
+    perf_config: PerformanceConfig | None = None,
 ) -> APIRouter:
     """
     Build a FastAPI ``APIRouter`` with one route per ``PromptEndpoint``.
@@ -44,7 +50,10 @@ def create_router(
     router = APIRouter()
 
     for ep in endpoints:
-        _register_endpoint(router, ep, llm_config, connector_registry)
+        _register_endpoint(
+            router, ep, llm_config, connector_registry,
+            cache, circuit_breaker, perf_config,
+        )
 
     return router
 
@@ -54,6 +63,9 @@ def _register_endpoint(
     endpoint: PromptEndpoint,
     llm_config: LLMConfig,
     connector_registry: ConnectorRegistry,
+    cache: ResponseCache | None = None,
+    circuit_breaker: CircuitBreaker | None = None,
+    perf_config: PerformanceConfig | None = None,
 ):
     """Register a single PromptEndpoint as a FastAPI route."""
     method = _fastapi_method(endpoint.method)
@@ -91,11 +103,29 @@ def _register_endpoint(
             len(str(body)) if body else 0,
         )
 
+        # Streaming path — return SSE stream
+        if ep.streaming:
+            return StreamingResponse(
+                process_request_streaming(
+                    endpoint=ep,
+                    request=cat_request,
+                    llm_config=llm_config,
+                    connector_registry=connector_registry,
+                    cache=cache,
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        # Standard path — full response
         result = await process_request(
             endpoint=ep,
             request=cat_request,
             llm_config=llm_config,
             connector_registry=connector_registry,
+            cache=cache,
+            circuit_breaker=circuit_breaker,
+            perf_config=perf_config,
         )
 
         response_body: dict[str, Any] = {"data": result.data}

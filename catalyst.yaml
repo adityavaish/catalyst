@@ -19,6 +19,24 @@ cors_origins:
   - "*"
 
 # ---------------------------------------------------------------------------
+# Response Caching
+# ---------------------------------------------------------------------------
+cache:
+  enabled: true
+  max_size: 1000           # max cached responses in memory
+  default_ttl: 300         # default TTL in seconds (per-endpoint overrides via cache_ttl)
+
+# ---------------------------------------------------------------------------
+# Performance Tuning
+# ---------------------------------------------------------------------------
+performance:
+  parallel_tool_calls: true          # run multiple tool calls concurrently
+  circuit_breaker_enabled: true      # fail fast when LLM is degraded
+  circuit_breaker_threshold: 5       # consecutive failures before opening
+  circuit_breaker_recovery: 30.0     # seconds before probing recovery
+  llm_timeout: 60.0                  # per-call timeout in seconds
+
+# ---------------------------------------------------------------------------
 # LLM Configuration
 # ---------------------------------------------------------------------------
 llm:

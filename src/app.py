@@ -19,6 +19,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.cache import ResponseCache
+from src.circuit_breaker import CircuitBreaker
 from src.connectors import ConnectorRegistry
 from src.models import AppConfig, ConnectorConfig
 from src.prompt_loader import load_all_prompts
@@ -71,12 +73,41 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
 # ---------------------------------------------------------------------------
 
 connector_registry = ConnectorRegistry()
+response_cache: ResponseCache | None = None
+circuit_breaker: CircuitBreaker | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
+    global response_cache, circuit_breaker
     config: AppConfig = app.state.config
+
+    # Initialize response cache
+    if config.cache.enabled:
+        response_cache = ResponseCache(
+            max_size=config.cache.max_size,
+            default_ttl=config.cache.default_ttl,
+        )
+        logger.info(
+            "Response cache enabled (max_size=%d, default_ttl=%ds)",
+            config.cache.max_size,
+            config.cache.default_ttl,
+        )
+
+    # Initialize circuit breaker
+    if config.performance.circuit_breaker_enabled:
+        circuit_breaker = CircuitBreaker(
+            failure_threshold=config.performance.circuit_breaker_threshold,
+            recovery_timeout=config.performance.circuit_breaker_recovery,
+            timeout=config.performance.llm_timeout,
+        )
+        logger.info(
+            "Circuit breaker enabled (threshold=%d, recovery=%ds, timeout=%ds)",
+            config.performance.circuit_breaker_threshold,
+            config.performance.circuit_breaker_recovery,
+            config.performance.llm_timeout,
+        )
 
     # Connect all configured connectors
     for cc in config.connectors:
@@ -97,7 +128,14 @@ async def lifespan(app: FastAPI):
             prompts_dir,
         )
 
-    api_router = create_router(endpoints, config.llm, connector_registry)
+    api_router = create_router(
+        endpoints,
+        config.llm,
+        connector_registry,
+        cache=response_cache,
+        circuit_breaker=circuit_breaker,
+        perf_config=config.performance,
+    )
     app.include_router(api_router)
 
     logger.info(
@@ -111,6 +149,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await connector_registry.disconnect_all()
+    if response_cache:
+        await response_cache.clear()
     logger.info("Catalyst shut down.")
 
 
@@ -150,7 +190,7 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
     # Health check (the only hardcoded endpoint!)
     @app.get("/health", tags=["system"])
     async def health():
-        return {
+        health_data: dict[str, Any] = {
             "status": "ok",
             "app": config.app_name,
             "connectors": [
@@ -158,6 +198,11 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
                 for c in connector_registry.all
             ],
         }
+        if response_cache:
+            health_data["cache"] = response_cache.stats
+        if circuit_breaker:
+            health_data["circuit_breaker"] = circuit_breaker.stats
+        return health_data
 
     # Meta endpoint — lists all registered AI endpoints
     @app.get("/meta/endpoints", tags=["system"])
