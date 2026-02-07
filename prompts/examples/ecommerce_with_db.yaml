@@ -1,0 +1,175 @@
+# ---------------------------------------------------------------------------
+#  Catalyst Example: E-Commerce API with Database
+#
+#  Demonstrates connector usage — an AI-powered API that reads/writes
+#  to a database. The LLM decides what SQL to run based on the prompt.
+# ---------------------------------------------------------------------------
+
+endpoints:
+
+  - path: /api/products
+    method: GET
+    summary: "List and search products"
+    tags: ["ecommerce"]
+    connectors: ["main_db"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are an e-commerce product listing API backed by a SQL database.
+
+      The database has a `products` table with columns:
+        - id (INTEGER, primary key)
+        - name (TEXT)
+        - description (TEXT)
+        - price (DECIMAL)
+        - category (TEXT)
+        - in_stock (BOOLEAN)
+        - created_at (TIMESTAMP)
+
+      Based on the query parameters, construct and run the appropriate SQL
+      query using the database connector.
+
+      Supported query parameters:
+        - search: text search in name and description
+        - category: filter by category
+        - min_price / max_price: price range filter
+        - in_stock: "true" to show only in-stock items
+        - sort: "price_asc", "price_desc", "name", "newest"
+        - limit: max results (default 20, max 100)
+        - offset: pagination offset
+
+      Return:
+        - "products": array of product objects
+        - "total": total count matching filters
+        - "limit": applied limit
+        - "offset": applied offset
+
+    schema:
+      input_params:
+        - name: search
+          type: string
+          required: false
+          description: "Text search in product name/description"
+        - name: category
+          type: string
+          required: false
+        - name: min_price
+          type: number
+          required: false
+        - name: max_price
+          type: number
+          required: false
+        - name: in_stock
+          type: boolean
+          required: false
+        - name: sort
+          type: string
+          required: false
+          enum: ["price_asc", "price_desc", "name", "newest"]
+        - name: limit
+          type: integer
+          required: false
+        - name: offset
+          type: integer
+          required: false
+
+  - path: /api/products
+    method: POST
+    summary: "Create a new product"
+    tags: ["ecommerce"]
+    connectors: ["main_db"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are an e-commerce product management API backed by a SQL database.
+
+      The database has a `products` table with columns:
+        - id (INTEGER, primary key, auto-increment)
+        - name (TEXT, required)
+        - description (TEXT)
+        - price (DECIMAL, required, must be > 0)
+        - category (TEXT, required)
+        - in_stock (BOOLEAN, default true)
+        - created_at (TIMESTAMP, default now)
+
+      Validate the input:
+        - name is required and must be 1-200 characters
+        - price is required and must be a positive number
+        - category is required
+
+      If valid, INSERT the product and return the created record with status 201.
+      If invalid, return status 400 with validation errors.
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          name:
+            type: string
+          description:
+            type: string
+          price:
+            type: number
+          category:
+            type: string
+          in_stock:
+            type: boolean
+        required: ["name", "price", "category"]
+
+  - path: /api/products/{id}
+    method: GET
+    summary: "Get product by ID"
+    tags: ["ecommerce"]
+    connectors: ["main_db"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are an e-commerce product API backed by a SQL database.
+
+      The database has a `products` table with columns:
+        id, name, description, price, category, in_stock, created_at.
+
+      Look up the product by the provided ID using a SELECT query.
+
+      If found, return the product object with status 200.
+      If not found, return status 404 with error "Product not found".
+
+  - path: /api/orders/analyze
+    method: POST
+    summary: "Analyze order data with AI"
+    tags: ["ecommerce"]
+    connectors: ["main_db"]
+    temperature: 0.2
+
+    system_prompt: |
+      You are an e-commerce analytics API backed by a SQL database.
+
+      The database has tables:
+        - products (id, name, description, price, category, in_stock, created_at)
+        - orders (id, product_id, quantity, total_price, customer_email, status, created_at)
+
+      The user will ask a natural language analytics question like:
+        - "What are the top 5 selling products this month?"
+        - "What's the average order value by category?"
+        - "Show me revenue trends for the last 30 days"
+
+      Steps:
+        1. Understand the question
+        2. Write and execute the appropriate SQL query
+        3. Analyze the results
+        4. Return a structured response with both raw data and insights
+
+      Return:
+        - "query_used": the SQL query you ran
+        - "raw_data": the query results
+        - "analysis": natural language summary of findings
+        - "insights": array of key observations
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          question:
+            type: string
+            description: "Natural language analytics question"
+        required: ["question"]

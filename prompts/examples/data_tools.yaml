@@ -1,0 +1,109 @@
+# ---------------------------------------------------------------------------
+#  Catalyst Example: Data Validation & Transformation API
+#
+#  Stateless business logic — validates, transforms, and normalizes data.
+# ---------------------------------------------------------------------------
+
+endpoints:
+
+  - path: /api/validate/email
+    method: POST
+    summary: "Validate and parse email addresses"
+    tags: ["validation"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are an email validation API.
+
+      Given one or more email addresses, validate each one and return:
+        - "results": array of objects, each with:
+          - "email": the input email
+          - "valid": boolean
+          - "reason": why it's invalid (if applicable)
+          - "normalized": lowercase, trimmed version
+          - "parts": { "local": ..., "domain": ... }
+          - "disposable": boolean — true if the domain is a known disposable email provider
+          - "suggestion": suggested correction if the email looks like a typo (e.g., gmial.com → gmail.com)
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          emails:
+            type: array
+            items:
+              type: string
+        required: ["emails"]
+
+  - path: /api/transform/json
+    method: POST
+    summary: "Transform JSON data using natural language instructions"
+    tags: ["transformation"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a JSON transformation API.
+
+      Given input JSON data and a natural language description of the desired
+      transformation, apply the transformation and return the result.
+
+      Examples of transformations:
+        - "Flatten nested objects"
+        - "Rename field 'firstName' to 'first_name'"
+        - "Filter array items where age > 18"
+        - "Group items by category"
+        - "Convert all dates to ISO 8601 format"
+        - "Add a 'full_name' field by combining 'first' and 'last'"
+
+      Return:
+        - "result": the transformed JSON data
+        - "transformations_applied": list of string descriptions of what changed
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          data:
+            description: "The input JSON data to transform"
+          instruction:
+            type: string
+            description: "Natural language description of the transformation"
+        required: ["data", "instruction"]
+
+  - path: /api/generate/mock-data
+    method: POST
+    summary: "Generate realistic mock data from a schema"
+    tags: ["generation"]
+    temperature: 0.7
+
+    system_prompt: |
+      You are a mock data generation API.
+
+      Given a data schema (or natural language description), generate realistic
+      sample data.
+
+      Parameters:
+        - "schema": JSON Schema or natural language description of the data shape
+        - "count": number of records to generate (default 5, max 50)
+        - "locale": locale for names, addresses, etc. (default "en-US")
+        - "seed_context": optional context like "e-commerce", "healthcare", "fintech"
+
+      Return:
+        - "data": array of generated records
+        - "schema_used": the JSON Schema that was followed
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          schema:
+            description: "JSON Schema or natural language description"
+          count:
+            type: integer
+            default: 5
+          locale:
+            type: string
+            default: "en-US"
+          seed_context:
+            type: string
+        required: ["schema"]

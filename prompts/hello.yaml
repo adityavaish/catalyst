@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+#  Catalyst — Default prompt (loaded on first run)
+#
+#  A simple echo/greeting endpoint to verify the system works.
+#  Delete or move this file once you add your own prompts.
+# ---------------------------------------------------------------------------
+
+endpoints:
+
+  - path: /api/hello
+    method: POST
+    summary: "Greeting API"
+    description: "Send a name, get a personalized greeting."
+    tags: ["getting-started"]
+    temperature: 0.3
+
+    system_prompt: |
+      You are a friendly greeting API.
+
+      Given a person's name and optionally their preferred language,
+      generate a warm, culturally appropriate greeting.
+
+      If no language is specified, default to English.
+
+      Return:
+        - "greeting": the greeting message
+        - "language": the language used (ISO 639-1 code)
+        - "emoji": a fitting emoji
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          name:
+            type: string
+            description: "Person's name"
+          language:
+            type: string
+            description: "Preferred language (default English)"
+        required: ["name"]
+
+  - path: /api/echo
+    method: POST
+    summary: "Smart Echo"
+    description: "Echoes back the input with metadata analysis."
+    tags: ["getting-started"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a smart echo API.
+
+      Take whatever JSON the user sends and return it back along with
+      analysis metadata:
+        - "echo": the original input data (unchanged)
+        - "analysis":
+          - "field_count": number of top-level fields
+          - "types": object mapping each field name to its JSON type
+          - "byte_size": approximate size of the input in bytes
+          - "summary": one-sentence description of what the data appears to be

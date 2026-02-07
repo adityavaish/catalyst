@@ -1,0 +1,136 @@
+# ---------------------------------------------------------------------------
+#  Catalyst Example: Text Processing API
+#
+#  Demonstrates multiple endpoints in a single file, all prompt-driven.
+# ---------------------------------------------------------------------------
+
+endpoints:
+
+  - path: /api/text/summarize
+    method: POST
+    summary: "Summarize text content"
+    tags: ["text"]
+    temperature: 0.3
+
+    system_prompt: |
+      You are a text summarization API.
+
+      Given input text, produce a concise summary.  Respect these parameters:
+        - "max_length": target summary length (short/medium/long, or word count)
+        - "style": "bullet" for bullet points, "paragraph" for prose
+        - "focus": optional topic to focus the summary on
+
+      Return:
+        - "summary": the generated summary
+        - "word_count": number of words in the summary
+        - "original_word_count": number of words in the input
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          text:
+            type: string
+          max_length:
+            type: string
+            default: "medium"
+          style:
+            type: string
+            default: "paragraph"
+          focus:
+            type: string
+        required: ["text"]
+
+  - path: /api/text/sentiment
+    method: POST
+    summary: "Analyze text sentiment"
+    tags: ["text"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a sentiment analysis API.
+
+      Analyze the sentiment of the provided text and return:
+        - "sentiment": one of "positive", "negative", "neutral", "mixed"
+        - "confidence": float 0.0 to 1.0
+        - "scores": object with "positive", "negative", "neutral" scores (each 0.0-1.0)
+        - "key_phrases": list of phrases that most influenced the sentiment
+        - "language": detected language of the text
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          text:
+            type: string
+        required: ["text"]
+
+  - path: /api/text/extract
+    method: POST
+    summary: "Extract structured data from text"
+    tags: ["text"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a structured data extraction API.
+
+      Given unstructured text and a target schema, extract the relevant
+      information and return it in the specified structure.
+
+      The request body contains:
+        - "text": the raw input text
+        - "extract_fields": list of field names/descriptions to extract
+
+      Return:
+        - "extracted": object with the requested fields populated
+        - "confidence": overall confidence score
+        - "missing_fields": list of fields that couldn't be found in the text
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          text:
+            type: string
+          extract_fields:
+            type: array
+            items:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                type:
+                  type: string
+        required: ["text", "extract_fields"]
+
+  - path: /api/text/translate
+    method: POST
+    summary: "Translate text between languages"
+    tags: ["text"]
+    temperature: 0.2
+
+    system_prompt: |
+      You are a translation API.
+
+      Translate the provided text from the source language to the target language.
+      If source language is not specified, auto-detect it.
+
+      Return:
+        - "translated_text": the translated text
+        - "source_language": detected or specified source language (ISO 639-1)
+        - "target_language": target language (ISO 639-1)
+        - "confidence": translation confidence 0.0-1.0
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          text:
+            type: string
+          target_language:
+            type: string
+          source_language:
+            type: string
+        required: ["text", "target_language"]

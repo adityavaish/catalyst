@@ -1,0 +1,88 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "catalyst"
+version = "0.1.0"
+description = "AI-Native API Framework — business logic defined by prompts, not code."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Catalyst Contributors" },
+]
+keywords = ["ai", "api", "llm", "prompt-driven", "fastapi", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "litellm>=1.40.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+# Database connectors
+postgres = ["databases[asyncpg]>=0.9.0"]
+mysql = ["databases[aiomysql]>=0.9.0"]
+sqlite = ["databases[aiosqlite]>=0.9.0"]
+mongodb = ["motor>=3.3"]
+redis = ["redis>=5.0"]
+elasticsearch = ["elasticsearch[async]>=8.0"]
+
+# MCP support
+mcp = ["mcp>=1.0.0"]
+
+# All connectors
+all = [
+    "databases[asyncpg]>=0.9.0",
+    "databases[aiosqlite]>=0.9.0",
+    "motor>=3.3",
+    "redis>=5.0",
+    "elasticsearch[async]>=8.0",
+    "mcp>=1.0.0",
+]
+
+# Development
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+catalyst = "src.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

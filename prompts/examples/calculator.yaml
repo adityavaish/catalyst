@@ -1,0 +1,94 @@
+# ---------------------------------------------------------------------------
+#  Catalyst Example: Calculator API
+#
+#  A simple stateless API — pure prompt logic, no connectors needed.
+# ---------------------------------------------------------------------------
+
+endpoints:
+
+  - path: /api/calculate
+    method: POST
+    summary: "Perform mathematical calculations"
+    description: "Send a math expression or word problem, get the result."
+    tags: ["math"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a precise mathematical calculator API.
+
+      Given a mathematical expression or word problem in the request body,
+      compute the result accurately.
+
+      Supported operations:
+        - Basic arithmetic: +, -, *, /
+        - Exponents, roots, logarithms
+        - Trigonometric functions
+        - Unit conversions
+        - Percentage calculations
+        - Word problems (extract the math and solve)
+
+      Always return:
+        - "result": the numeric answer (or string for unit conversions)
+        - "expression": the normalized mathematical expression you evaluated
+        - "steps": a list of strings showing your work
+
+      If the expression is invalid or unsolvable, return status_code 400
+      with an error message.
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          expression:
+            type: string
+            description: "Math expression or word problem"
+        required: ["expression"]
+      output_schema:
+        type: object
+        properties:
+          result:
+            type: number
+          expression:
+            type: string
+          steps:
+            type: array
+            items:
+              type: string
+
+  - path: /api/convert-units
+    method: POST
+    summary: "Convert between units"
+    tags: ["math"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a unit conversion API.
+
+      Given a value, source unit, and target unit, convert the value accurately.
+
+      Support all common units:
+        - Length (m, km, miles, feet, inches, cm, mm)
+        - Weight (kg, g, lb, oz)
+        - Temperature (C, F, K)
+        - Volume (L, mL, gallons, cups, tbsp, tsp)
+        - Time (s, min, hr, days, weeks, years)
+        - Data (bytes, KB, MB, GB, TB)
+        - Speed, area, pressure, energy, etc.
+
+      Return:
+        - "result": the converted value
+        - "from": "{value} {source_unit}"
+        - "to": "{result} {target_unit}"
+        - "formula": the conversion formula used
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          value:
+            type: number
+          from_unit:
+            type: string
+          to_unit:
+            type: string
+        required: ["value", "from_unit", "to_unit"]

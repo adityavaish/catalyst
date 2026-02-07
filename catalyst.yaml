@@ -1,0 +1,84 @@
+# ===========================================================================
+#  Catalyst Configuration
+#
+#  This is the main config file.  Environment variables can be referenced
+#  with ${ENV_VAR} syntax.
+# ===========================================================================
+
+app_name: "Catalyst"
+host: "0.0.0.0"
+port: 8000
+debug: true
+log_level: "INFO"
+
+# Directory containing prompt YAML files (scanned recursively)
+prompts_dir: "prompts"
+
+# Cross-Origin Resource Sharing
+cors_origins:
+  - "*"
+
+# ---------------------------------------------------------------------------
+# LLM Configuration
+# ---------------------------------------------------------------------------
+llm:
+  provider: "openai"         # openai | anthropic | azure_openai | ollama | litellm
+  model: "gpt-4o"            # or claude-sonnet-4-20250514, ollama/llama3, etc.
+  api_key: "${OPENAI_API_KEY}"
+  # api_base: "http://localhost:11434"  # uncomment for Ollama
+  temperature: 0.0
+  max_tokens: 4096
+
+# ---------------------------------------------------------------------------
+# Connectors — databases, MCP servers, HTTP services
+# ---------------------------------------------------------------------------
+connectors: []
+
+# Example connectors (uncomment as needed):
+#
+#   # -- PostgreSQL --
+#   - name: main_db
+#     type: postgres
+#     connection_string: "${DATABASE_URL}"
+#
+#   # -- SQLite (great for local dev) --
+#   - name: main_db
+#     type: sqlite
+#     connection_string: "sqlite:///./data/catalyst.db"
+#
+#   # -- MongoDB --
+#   - name: mongo
+#     type: mongodb
+#     connection_string: "${MONGODB_URI}"
+#     options:
+#       database: "myapp"
+#
+#   # -- Redis --
+#   - name: cache
+#     type: redis
+#     connection_string: "redis://localhost:6379"
+#
+#   # -- External HTTP API --
+#   - name: weather_api
+#     type: http
+#     connection_string: "https://api.openweathermap.org"
+#     options:
+#       headers:
+#         x-api-key: "${WEATHER_API_KEY}"
+#       timeout: 10
+#
+#   # -- MCP Server (stdio) --
+#   - name: filesystem
+#     type: mcp
+#     mcp_server_command: "npx"
+#     mcp_server_args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+#
+#   # -- MCP Server (SSE) --
+#   - name: remote_tools
+#     type: mcp
+#     mcp_server_url: "http://localhost:3001/sse"
+#
+#   # -- Elasticsearch --
+#   - name: search
+#     type: elasticsearch
+#     connection_string: "http://localhost:9200"
