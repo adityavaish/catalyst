@@ -101,7 +101,11 @@ async def test_circuit_starts_closed():
 @pytest.mark.asyncio
 async def test_circuit_passes_through_on_success():
     cb = CircuitBreaker(failure_threshold=3)
-    result = await cb.call(asyncio.coroutine(lambda: "ok"))
+
+    async def succeed():
+        return "ok"
+
+    result = await cb.call(succeed)
     assert result == "ok"
 
 
