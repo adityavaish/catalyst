@@ -114,6 +114,12 @@ async def _call_llm(
     if llm_config.api_base:
         kwargs["api_base"] = llm_config.api_base
 
+    # Azure OpenAI specific parameters
+    if llm_config.provider.value == "azure_openai":
+        kwargs["api_version"] = llm_config.api_version
+        if llm_config.azure_deployment:
+            kwargs["model"] = f"azure/{llm_config.azure_deployment}"
+
     # Merge any extra provider-specific kwargs
     kwargs.update(llm_config.extra)
 
@@ -148,6 +154,13 @@ async def _call_llm_streaming(
         kwargs["api_key"] = llm_config.api_key
     if llm_config.api_base:
         kwargs["api_base"] = llm_config.api_base
+
+    # Azure OpenAI specific parameters
+    if llm_config.provider.value == "azure_openai":
+        kwargs["api_version"] = llm_config.api_version
+        if llm_config.azure_deployment:
+            kwargs["model"] = f"azure/{llm_config.azure_deployment}"
+
     kwargs.update(llm_config.extra)
 
     response = await litellm.acompletion(**kwargs)

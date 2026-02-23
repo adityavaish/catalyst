@@ -40,10 +40,12 @@ performance:
 # LLM Configuration
 # ---------------------------------------------------------------------------
 llm:
-  provider: "openai"         # openai | anthropic | azure_openai | ollama | litellm
-  model: "gpt-4o"            # or claude-sonnet-4-20250514, ollama/llama3, etc.
-  api_key: "${OPENAI_API_KEY}"
-  # api_base: "http://localhost:11434"  # uncomment for Ollama
+  provider: "azure_openai"   # openai | anthropic | azure_openai | ollama | litellm
+  model: "azure/gpt-4o-mini"  # Must be prefixed with azure/ for Azure OpenAI
+  api_key: "${AZURE_OPENAI_API_KEY}"
+  api_base: "${AZURE_OPENAI_ENDPOINT}"  # e.g. https://your-resource.openai.azure.com
+  api_version: "2024-12-01-preview"
+  azure_deployment: "gpt-4o-mini"
   temperature: 0.0
   max_tokens: 4096
 

@@ -77,4 +77,6 @@ def test_catalyst_response():
 def test_app_config_defaults():
     config = AppConfig()
     assert config.port == 8000
-    assert config.llm.model == "gpt-4o"
+    assert config.llm.model == "azure/gpt-4o"
+    assert config.llm.provider.value == "azure_openai"
+    assert config.llm.api_version == "2024-12-01-preview"

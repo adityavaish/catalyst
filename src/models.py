@@ -155,10 +155,12 @@ class CatalystResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class LLMConfig(BaseModel):
-    provider: LLMProvider = LLMProvider.OPENAI
-    model: str = "gpt-4o"
+    provider: LLMProvider = LLMProvider.AZURE_OPENAI
+    model: str = "azure/gpt-4o-mini"
     api_key: str | None = None
-    api_base: str | None = None
+    api_base: str | None = Field(None, description="Azure OpenAI endpoint URL, e.g. https://your-resource.openai.azure.com")
+    api_version: str = "2024-12-01-preview"
+    azure_deployment: str | None = Field(None, description="Azure OpenAI deployment name (if different from model)")
     temperature: float = 0.0
     max_tokens: int = 4096
     extra: dict[str, Any] = Field(default_factory=dict)

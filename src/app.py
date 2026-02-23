@@ -60,9 +60,11 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         logger.warning("No config file found at %s — using defaults + env vars.", path)
         return AppConfig(
             llm=_resolve_env({
-                "provider": os.getenv("CATALYST_LLM_PROVIDER", "openai"),
-                "model": os.getenv("CATALYST_LLM_MODEL", "gpt-4o"),
-                "api_key": os.getenv("OPENAI_API_KEY", ""),
+                "provider": os.getenv("CATALYST_LLM_PROVIDER", "azure_openai"),
+                "model": os.getenv("CATALYST_LLM_MODEL", "azure/gpt-4o-mini"),
+                "api_key": os.getenv("AZURE_OPENAI_API_KEY", ""),
+                "api_base": os.getenv("AZURE_OPENAI_ENDPOINT", ""),
+                "api_version": os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
             }),
             prompts_dir=os.getenv("CATALYST_PROMPTS_DIR", "prompts"),
         )

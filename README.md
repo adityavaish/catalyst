@@ -48,7 +48,7 @@ pip install -e ".[postgres,mcp,redis]"
 
 ```bash
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY (or ANTHROPIC_API_KEY, etc.)
+# Edit .env and add your AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT
 ```
 
 ### 3. Create a prompt file
@@ -264,7 +264,16 @@ MCP tools are **auto-discovered** — the connector queries the MCP server for a
 Catalyst uses [LiteLLM](https://github.com/BerriAI/litellm) under the hood, supporting 100+ LLM providers:
 
 ```yaml
-# OpenAI
+# Azure OpenAI (default)
+llm:
+  provider: azure_openai
+  model: azure/gpt-4o
+  api_key: "${AZURE_OPENAI_API_KEY}"
+  api_base: "${AZURE_OPENAI_ENDPOINT}"    # e.g. https://your-resource.openai.azure.com
+  api_version: "2024-12-01-preview"
+  # azure_deployment: "my-gpt4o-deployment"  # if deployment name differs from model
+
+# OpenAI (direct)
 llm:
   provider: openai
   model: gpt-4o
@@ -275,13 +284,6 @@ llm:
   provider: anthropic
   model: claude-sonnet-4-20250514
   api_key: "${ANTHROPIC_API_KEY}"
-
-# Azure OpenAI
-llm:
-  provider: azure_openai
-  model: azure/gpt-4o
-  api_key: "${AZURE_API_KEY}"
-  api_base: "https://your-resource.openai.azure.com"
 
 # Ollama (local)
 llm:

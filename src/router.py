@@ -74,8 +74,9 @@ def _register_endpoint(
     # We need to capture `endpoint` in a closure properly
     ep = endpoint
 
-    async def handler(request: Request, **path_params: Any):
+    async def handler(request: Request):
         # Gather all input
+        path_params = dict(request.path_params)
         query_params = dict(request.query_params)
         headers = dict(request.headers)
 
