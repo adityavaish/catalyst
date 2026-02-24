@@ -64,6 +64,7 @@ class ExecutionPlan(BaseModel):
     endpoint_key: str                          # base key, e.g. "POST:/api/calculate"
     variant_key: str = ""                      # with discriminators, e.g. "POST:/api/convert-units|body.from_unit=celsius|body.to_unit=fahrenheit"
     discriminator_fields: list[str] = Field(default_factory=list)  # input paths that vary plan shape
+    is_static: bool = False                    # True when extracted from an empty-input request
     steps: list[PlanStep] = Field(default_factory=list)
     response_template: Any = Field(default_factory=dict)
     created_at: float = Field(default_factory=time.time)
@@ -130,9 +131,43 @@ class PlanCache:
                 self._stats["refreshes"] += 1
                 logger.info("Plan expired/errored for %s — will regenerate", vk)
                 return None
+            # Static plans (extracted from empty-input requests) must NOT match
+            # requests that carry query/body parameters — those need their own
+            # LLM call to produce a filter-aware plan.
+            if plan.is_static and input_data:
+                leaves = _collect_leaf_values(input_data)
+                if leaves:
+                    self._stats["misses"] += 1
+                    return None
+            # Coverage check: reject plan if request has input parameters the
+            # plan doesn't know about (not in its argument mappings, templates,
+            # or discriminator fields).
+            if input_data and not plan.is_static:
+                if not self._plan_covers_input(plan, input_data):
+                    self._stats["misses"] += 1
+                    logger.debug(
+                        "Plan %s rejected: request has uncovered input params", vk,
+                    )
+                    return None
             plan.hit_count += 1
             self._stats["hits"] += 1
             return plan
+
+    @staticmethod
+    def _plan_covers_input(plan: ExecutionPlan, input_data: dict) -> bool:
+        """Return True if the plan accounts for every leaf in *input_data*."""
+        request_leaves = set(_collect_leaf_values(input_data).keys())
+        if not request_leaves:
+            return True
+        # Gather all input paths the plan references
+        known_paths: set[str] = set(plan.discriminator_fields or [])
+        for step in plan.steps:
+            for arg in step.arguments:
+                if arg.source == ValueSource.INPUT and arg.source_path:
+                    known_paths.add(arg.source_path)
+                if arg.source == ValueSource.TEMPLATE and arg.template_inputs:
+                    known_paths.update(arg.template_inputs.values())
+        return request_leaves <= known_paths
 
     async def put(self, plan: ExecutionPlan) -> None:
         async with self._lock:
@@ -216,38 +251,65 @@ def _values_match(a: Any, b: Any) -> bool:
     return str(a).strip() == str(b).strip()
 
 
-def _find_value_in_dict(value: Any, obj: Any, prefix: str = "") -> str | None:
-    """Recursively search for *value* in a nested dict/list. Returns dot-path."""
+def _find_all_in_dict(value: Any, obj: Any, prefix: str = "") -> list[str]:
+    """Recursively collect *all* dot-paths where *value* appears in a nested structure."""
+    results: list[str] = []
     if isinstance(obj, dict):
         for k, v in obj.items():
             path = f"{prefix}.{k}" if prefix else k
-            found = _find_value_in_dict(value, v, path)
-            if found is not None:
-                return found
+            results.extend(_find_all_in_dict(value, v, path))
     elif isinstance(obj, (list, tuple)):
         for i, v in enumerate(obj):
             path = f"{prefix}.{i}"
-            found = _find_value_in_dict(value, v, path)
-            if found is not None:
-                return found
+            results.extend(_find_all_in_dict(value, v, path))
     else:
         if _values_match(obj, value):
-            return prefix
-    return None
+            results.append(prefix)
+    return results
 
 
-def _find_in_input(value: Any, input_data: dict) -> str | None:
-    """Search input_data (body, path_params, query_params) for a value."""
+def _find_value_in_dict(value: Any, obj: Any, prefix: str = "") -> str | None:
+    """Recursively search for *value* in a nested dict/list. Returns dot-path."""
+    paths = _find_all_in_dict(value, obj, prefix)
+    return paths[0] if paths else None
+
+
+def _find_in_input(value: Any, input_data: dict, hint_key: str | None = None) -> str | None:
+    """Search input_data (body, path_params, query_params) for a value.
+
+    When *hint_key* is provided, prefer a path that ends with the same key.
+    """
+    if hint_key:
+        # Try to find a path ending with the hint key first
+        first_match: str | None = None
+        for leaf_path, leaf_val in _collect_leaf_values(input_data).items():
+            if _values_match(leaf_val, value):
+                if leaf_path.endswith(f".{hint_key}") or leaf_path == hint_key:
+                    return leaf_path
+                if first_match is None:
+                    first_match = leaf_path
+        return first_match
     return _find_value_in_dict(value, input_data)
 
 
-def _find_in_tool_results(value: Any, tool_results: list[dict]) -> str | None:
-    """Search tool results for a value. Returns 'step_idx.field_path'."""
+def _find_in_tool_results(value: Any, tool_results: list[dict], hint_key: str | None = None) -> str | None:
+    """Search tool results for a value. Returns 'step_idx.field_path'.
+
+    When *hint_key* is provided (the response dict key being mapped), prefer a
+    tool-result path that ends with the same key name.  This prevents ambiguous
+    mappings when multiple fields share the same value (e.g. id=1, in_stock=1).
+    """
+    all_paths: list[str] = []
     for idx, result in enumerate(tool_results):
-        found = _find_value_in_dict(value, result, str(idx))
-        if found is not None:
-            return found
-    return None
+        all_paths.extend(_find_all_in_dict(value, result, str(idx)))
+
+    if not all_paths:
+        return None
+    if hint_key:
+        for p in all_paths:
+            if p.endswith(f".{hint_key}"):
+                return p
+    return all_paths[0]
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +514,7 @@ def extract_plan_from_trace(
         endpoint_key=endpoint_key,
         variant_key=variant_key,
         discriminator_fields=discriminator_fields,
+        is_static=not has_input and not has_dynamic_mapping,
         steps=steps,
         response_template=response_template,
         ttl=ttl,
@@ -489,9 +552,9 @@ def _build_response_template(
         for path, val in _collect_leaf_values(tr).items():
             combined_leaves[f"tool_result.{idx}.{path}"] = val
 
-    def _process(obj: Any, is_list_item: bool = False) -> Any:
+    def _process(obj: Any, is_list_item: bool = False, hint_key: str | None = None) -> Any:
         if isinstance(obj, dict):
-            return {k: _process(v) for k, v in obj.items()}
+            return {k: _process(v, hint_key=k) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
             processed = [_process(v, is_list_item=True) for v in obj]
             # If ALL items in the list are unmappable literals, the list was
@@ -506,11 +569,13 @@ def _build_response_template(
             return processed
 
         # Leaf — try exact matches first (tool_result, then input)
-        tp = _find_in_tool_results(obj, tool_results)
+        # Pass hint_key to prefer paths ending with the same key name,
+        # avoiding ambiguous mappings (e.g. id=1 vs in_stock=1).
+        tp = _find_in_tool_results(obj, tool_results, hint_key=hint_key)
         if tp is not None:
             return {"__source__": "tool_result", "__path__": tp}
 
-        ip = _find_in_input(obj, input_data)
+        ip = _find_in_input(obj, input_data, hint_key=hint_key)
         if ip is not None:
             return {"__source__": "input", "__path__": ip}
 
