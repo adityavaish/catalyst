@@ -308,7 +308,10 @@ def _try_build_template(
         pattern = r'(?<![a-zA-Z0-9_.])' + escaped + r'(?![a-zA-Z0-9_.])'
         if re.search(pattern, template):
             placeholder = "{%" + path + "%}"
-            template = re.sub(pattern, placeholder, template)
+            # Only replace the FIRST occurrence — subsequent matches are likely
+            # constants that coincide with the input value (e.g. "5280 / 5280"
+            # where the first 5280 is the input and the second is a factor).
+            template = re.sub(pattern, placeholder, template, count=1)
             embedded[placeholder] = path
 
     if embedded:
