@@ -11,6 +11,7 @@ No business logic lives here.  Each route is a thin shim that:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -34,6 +35,88 @@ logger = logging.getLogger(__name__)
 
 def _fastapi_method(method: HttpMethod) -> str:
     return method.value.lower()
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI schema builder — makes Swagger show input fields
+# ---------------------------------------------------------------------------
+
+_TYPE_MAP = {
+    "string": "string",
+    "integer": "integer",
+    "number": "number",
+    "boolean": "boolean",
+    "array": "array",
+    "object": "object",
+}
+
+
+def _build_openapi_extra(endpoint: PromptEndpoint) -> dict[str, Any]:
+    """
+    Build an ``openapi_extra`` dict from the endpoint's YAML schema so that
+    Swagger UI displays proper request body fields and parameters.
+    """
+    extra: dict[str, Any] = {}
+
+    # ── Path parameters (extracted from URL pattern like /api/products/{id}) ──
+    path_param_names = re.findall(r"\{(\w+)\}", endpoint.path)
+
+    parameters: list[dict[str, Any]] = []
+
+    for name in path_param_names:
+        # Check if there's a matching ParamSpec for richer metadata
+        param_spec = next(
+            (p for p in endpoint.schema_.input_params if p.name == name), None
+        )
+        parameters.append({
+            "name": name,
+            "in": "path",
+            "required": True,
+            "schema": {
+                "type": _TYPE_MAP.get(
+                    param_spec.type if param_spec else "string", "string"
+                ),
+            },
+            "description": param_spec.description if param_spec else "",
+        })
+
+    # ── Query parameters (from input_params that aren't path params) ──────────
+    for p in endpoint.schema_.input_params:
+        if p.name in path_param_names:
+            continue  # already handled above
+        param_schema: dict[str, Any] = {
+            "type": _TYPE_MAP.get(p.type, "string"),
+        }
+        if p.default is not None:
+            param_schema["default"] = p.default
+        if p.enum:
+            param_schema["enum"] = p.enum
+
+        parameters.append({
+            "name": p.name,
+            "in": "query",
+            "required": p.required,
+            "schema": param_schema,
+            "description": p.description,
+        })
+
+    if parameters:
+        extra["parameters"] = parameters
+
+    # ── Request body (from input_body, for POST/PUT/PATCH) ────────────────────
+    if endpoint.schema_.input_body and endpoint.method in (
+        HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH,
+    ):
+        extra["requestBody"] = {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": endpoint.schema_.input_body,
+                }
+            },
+        }
+
+    return extra
 
 
 def create_router(
@@ -70,6 +153,9 @@ def _register_endpoint(
     """Register a single PromptEndpoint as a FastAPI route."""
     method = _fastapi_method(endpoint.method)
     path = endpoint.path
+
+    # Build OpenAPI extra from YAML schema so Swagger shows parameters
+    openapi_extra = _build_openapi_extra(endpoint)
 
     # We need to capture `endpoint` in a closure properly
     ep = endpoint
@@ -146,12 +232,15 @@ def _register_endpoint(
 
     # Register with the correct HTTP method
     route_decorator = getattr(router, method)
-    route_decorator(
-        path,
-        summary=ep.summary or f"{method.upper()} {path}",
-        description=ep.description or ep.system_prompt[:200],
-        tags=ep.tags or ["catalyst"],
-        name=handler.__name__,
-    )(handler)
+    route_kwargs: dict[str, Any] = {
+        "summary": ep.summary or f"{method.upper()} {path}",
+        "description": ep.description or ep.system_prompt[:200],
+        "tags": ep.tags or ["catalyst"],
+        "name": handler.__name__,
+    }
+    if openapi_extra:
+        route_kwargs["openapi_extra"] = openapi_extra
+
+    route_decorator(path, **route_kwargs)(handler)
 
     logger.info("Registered route: %s %s", method.upper(), path)

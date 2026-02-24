@@ -202,20 +202,48 @@ async def _dispatch_tool_call(
     connectors: list[BaseConnector],
 ) -> Any:
     """Route a tool call to the correct connector and action."""
-    prefix, connector_name, action = _parse_connector_tool_name(tool_name)
+    # Try to match against actual connector names (handles underscores in names)
+    prefix = ""
+    if tool_name.startswith("connector_"):
+        prefix = "connector"
+        rest = tool_name[len("connector_"):]
+    elif tool_name.startswith("mcp_"):
+        prefix = "mcp"
+        rest = tool_name[len("mcp_"):]
+    else:
+        raise ValueError(f"No connector found for tool call: {tool_name}")
 
+    # Match by checking if rest starts with a known connector name
+    matched_conn = None
+    action = ""
     for conn in connectors:
-        if conn.name == connector_name:
-            logger.info("Dispatching tool %s → connector '%s' action '%s'", tool_name, connector_name, action)
-            if prefix == "mcp":
-                return await conn.execute(action, **arguments)
-            elif prefix == "connector" and action == "request":
-                method = arguments.pop("method", "GET")
-                return await conn.execute(method, **arguments)
-            else:
-                return await conn.execute(action, **arguments)
+        candidate = conn.name + "_"
+        if rest.startswith(candidate):
+            matched_conn = conn
+            action = rest[len(candidate):]
+            break
 
-    raise ValueError(f"No connector found for tool call: {tool_name}")
+    # Fallback to first-underscore split for simple names
+    if matched_conn is None:
+        parts = rest.split("_", 1)
+        if len(parts) == 2:
+            for conn in connectors:
+                if conn.name == parts[0]:
+                    matched_conn = conn
+                    action = parts[1]
+                    break
+
+    if matched_conn is None:
+        raise ValueError(f"No connector found for tool call: {tool_name}")
+
+    logger.info("Dispatching tool %s → connector '%s' action '%s'", tool_name, matched_conn.name, action)
+    if prefix == "mcp":
+        return await matched_conn.execute(action, **arguments)
+    elif prefix == "connector" and action == "request":
+        method = arguments.pop("method", "GET")
+        return await matched_conn.execute(method, **arguments)
+    else:
+        return await matched_conn.execute(action, **arguments)
 
 
 async def _dispatch_tool_calls_parallel(

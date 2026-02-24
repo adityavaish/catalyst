@@ -35,6 +35,7 @@ class ConnectorType(str, enum.Enum):
     REDIS = "redis"
     HTTP = "http"
     ELASTICSEARCH = "elasticsearch"
+    MATH = "math"
 
 
 class LLMProvider(str, enum.Enum):

@@ -52,7 +52,9 @@ llm:
 # ---------------------------------------------------------------------------
 # Connectors — databases, MCP servers, HTTP services
 # ---------------------------------------------------------------------------
-connectors: []
+connectors:
+  - name: math_eval
+    type: math
 
 # Example connectors (uncomment as needed):
 #

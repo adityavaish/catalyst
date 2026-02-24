@@ -590,6 +590,134 @@ class MCPConnector(BaseConnector):
 
 
 # ---------------------------------------------------------------------------
+# Math evaluator (safe Python math)
+# ---------------------------------------------------------------------------
+
+import ast
+import math as _math
+import operator
+
+
+class MathConnector(BaseConnector):
+    """
+    Safe math expression evaluator using Python's AST.
+    Allows the LLM to delegate arithmetic to deterministic code.
+    """
+
+    # Allowed operators
+    _OPS = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+        ast.USub: operator.neg,
+        ast.UAdd: operator.pos,
+    }
+
+    # Allowed math functions
+    _FUNCS: dict[str, Any] = {
+        "abs": abs,
+        "round": round,
+        "min": min,
+        "max": max,
+        "sqrt": _math.sqrt,
+        "log": _math.log,
+        "log10": _math.log10,
+        "log2": _math.log2,
+        "sin": _math.sin,
+        "cos": _math.cos,
+        "tan": _math.tan,
+        "asin": _math.asin,
+        "acos": _math.acos,
+        "atan": _math.atan,
+        "ceil": _math.ceil,
+        "floor": _math.floor,
+        "factorial": _math.factorial,
+        "pi": _math.pi,
+        "e": _math.e,
+    }
+
+    def _safe_eval(self, node: ast.AST) -> float | int:
+        """Recursively evaluate an AST node safely."""
+        if isinstance(node, ast.Expression):
+            return self._safe_eval(node.body)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)):
+                return node.value
+            raise ValueError(f"Unsupported constant: {node.value!r}")
+        if isinstance(node, ast.BinOp):
+            op = self._OPS.get(type(node.op))
+            if op is None:
+                raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+            return op(self._safe_eval(node.left), self._safe_eval(node.right))
+        if isinstance(node, ast.UnaryOp):
+            op = self._OPS.get(type(node.op))
+            if op is None:
+                raise ValueError(f"Unsupported unary: {type(node.op).__name__}")
+            return op(self._safe_eval(node.operand))
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in self._FUNCS:
+                args = [self._safe_eval(a) for a in node.args]
+                return self._FUNCS[node.func.id](*args)
+            raise ValueError(f"Unsupported function call")
+        if isinstance(node, ast.Name):
+            if node.id in self._FUNCS and not callable(self._FUNCS[node.id]):
+                return self._FUNCS[node.id]  # constants like pi, e
+            raise ValueError(f"Unknown variable: {node.id}")
+        raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+
+    async def execute(self, action: str, **kwargs: Any) -> Any:
+        """
+        Actions:
+          - evaluate: safely evaluate a math expression string
+        """
+        if action == "evaluate":
+            expression = kwargs.get("expression", "")
+            try:
+                tree = ast.parse(expression, mode="eval")
+                result = self._safe_eval(tree)
+                # Round to avoid floating point noise
+                if isinstance(result, float) and result == int(result):
+                    result = int(result)
+                return {"result": result, "expression": expression}
+            except Exception as e:
+                return {"error": f"Cannot evaluate '{expression}': {e}"}
+        return {"error": f"Unknown action: {action}"}
+
+    def tool_definitions(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": f"connector_{self.name}_evaluate",
+                    "description": (
+                        "Evaluate a mathematical expression and return the exact numeric result. "
+                        "Supports: +, -, *, /, //, **, %, and functions like sqrt(), log(), "
+                        "sin(), cos(), tan(), abs(), round(), ceil(), floor(), factorial(). "
+                        "Constants: pi, e. ALWAYS use this tool for any arithmetic computation."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "expression": {
+                                "type": "string",
+                                "description": (
+                                    "Python math expression to evaluate, e.g. "
+                                    "'20 + 8121 - 1824 / 12' or 'sqrt(144) + 3**2'"
+                                ),
+                            }
+                        },
+                        "required": ["expression"],
+                    },
+                },
+            }
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -602,6 +730,7 @@ _CONNECTOR_MAP: dict[ConnectorType, type[BaseConnector]] = {
     ConnectorType.HTTP: HTTPConnector,
     ConnectorType.ELASTICSEARCH: ElasticsearchConnector,
     ConnectorType.MCP: MCPConnector,
+    ConnectorType.MATH: MathConnector,
 }
 
 
