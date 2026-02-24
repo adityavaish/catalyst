@@ -1,0 +1,329 @@
+# ---------------------------------------------------------------------------
+#  Catalyst Example: Banking Transaction System
+#
+#  A realistic banking API that handles accounts, transfers, transaction
+#  history, and financial analytics — all backed by a SQL database and
+#  orchestrated by LLM-generated SQL queries.
+# ---------------------------------------------------------------------------
+
+endpoints:
+
+  # ── 1. List / search accounts ─────────────────────────────────────────
+  - path: /api/accounts
+    method: GET
+    summary: "List and search bank accounts"
+    tags: ["banking"]
+    connectors: ["main_db"]
+    temperature: 0.0
+    cache_ttl: 15
+
+    system_prompt: |
+      You are a banking API backed by a SQL database.
+
+      The database has an `accounts` table with columns:
+        - id (INTEGER, primary key)
+        - account_number (TEXT, unique, e.g. "ACC-1001")
+        - holder_name (TEXT)
+        - email (TEXT)
+        - account_type (TEXT: "checking", "savings", "business")
+        - balance (REAL, current balance in USD)
+        - currency (TEXT, default "USD")
+        - status (TEXT: "active", "frozen", "closed")
+        - created_at (TIMESTAMP)
+
+      Based on query parameters, construct and run the appropriate SQL query.
+
+      Supported query parameters:
+        - holder_name: partial match (LIKE) on holder name
+        - account_type: filter by type (checking, savings, business)
+        - status: filter by status (active, frozen, closed)
+        - min_balance / max_balance: balance range filter
+        - sort: "balance_asc", "balance_desc", "name", "newest"
+        - limit: max results (default 20, max 100)
+        - offset: pagination offset
+
+      Return:
+        - "accounts": array of account objects
+        - "total": total count matching filters
+
+    schema:
+      input_params:
+        - name: holder_name
+          type: string
+          required: false
+          description: "Partial name match"
+        - name: account_type
+          type: string
+          required: false
+          enum: ["checking", "savings", "business"]
+        - name: status
+          type: string
+          required: false
+          enum: ["active", "frozen", "closed"]
+        - name: min_balance
+          type: number
+          required: false
+        - name: max_balance
+          type: number
+          required: false
+        - name: sort
+          type: string
+          required: false
+          enum: ["balance_asc", "balance_desc", "name", "newest"]
+        - name: limit
+          type: integer
+          required: false
+        - name: offset
+          type: integer
+          required: false
+
+  # ── 2. Get account by ID ──────────────────────────────────────────────
+  - path: /api/accounts/{id}
+    method: GET
+    summary: "Get account details by ID"
+    tags: ["banking"]
+    connectors: ["main_db"]
+    temperature: 0.0
+    cache_ttl: 15
+
+    system_prompt: |
+      You are a banking API backed by a SQL database.
+
+      The database has an `accounts` table with columns:
+        id, account_number, holder_name, email, account_type, balance,
+        currency, status, created_at.
+
+      Look up the account by the provided ID using a SELECT query.
+
+      If found, return the full account object with status 200.
+      If not found, return status 404 with error "Account not found".
+
+  # ── 3. Transfer funds between accounts ────────────────────────────────
+  - path: /api/transfers
+    method: POST
+    summary: "Transfer funds between accounts"
+    tags: ["banking"]
+    connectors: ["main_db"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a banking transfer API backed by a SQL database.
+
+      Tables:
+        - accounts (id, account_number, holder_name, email, account_type, balance, currency, status, created_at)
+        - transactions (id, from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
+
+      Process a fund transfer with these STRICT steps IN THIS EXACT ORDER.
+      CRITICAL: You MUST complete ALL validation steps BEFORE executing any
+      INSERT or UPDATE statements.  NEVER modify the database until every
+      check has passed.
+
+      STEP 1 — VALIDATE inputs (no SQL needed):
+        - from_account_id and to_account_id must both be present
+        - They must be different (cannot transfer to same account)
+        - amount must be a number greater than 0
+        → If any check fails, IMMEDIATELY return status 400 with a clear error.
+          Do NOT execute any SQL queries.
+
+      STEP 2 — VALIDATE accounts (read-only SELECT queries only):
+        - Run: SELECT id, status, balance FROM accounts WHERE id IN (<from_account_id>, <to_account_id>)
+        - Both accounts must exist — if either is missing, return 400 "Account not found"
+        - Both accounts must have status = 'active' — if frozen/closed, return 400 "Account not active"
+        - The from_account's balance must be >= amount — if not, return 400 "Insufficient funds"
+        → If any check fails, STOP and return the error.  Do NOT proceed to step 3.
+
+      STEP 3 — EXECUTE transfer (only if ALL validations passed):
+        Run these three statements:
+        a. UPDATE accounts SET balance = balance - <amount> WHERE id = <from_account_id>
+        b. UPDATE accounts SET balance = balance + <amount> WHERE id = <to_account_id>
+        c. INSERT INTO transactions (from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
+           VALUES (<from_account_id>, <to_account_id>, <amount>, 'USD', 'transfer', <description or 'Fund transfer'>, 'completed', 'TXN-' || hex(randomblob(3)), datetime('now'))
+
+      STEP 4 — Return the created transaction record with status 201,
+        including the updated balances of both accounts via:
+        SELECT balance FROM accounts WHERE id IN (<from_account_id>, <to_account_id>)
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          from_account_id:
+            type: integer
+            description: "Source account ID"
+          to_account_id:
+            type: integer
+            description: "Destination account ID"
+          amount:
+            type: number
+            description: "Transfer amount (must be > 0)"
+          description:
+            type: string
+            description: "Optional transfer description"
+        required: ["from_account_id", "to_account_id", "amount"]
+
+  # ── 4. Get transaction history ────────────────────────────────────────
+  - path: /api/transactions
+    method: GET
+    summary: "Get transaction history"
+    tags: ["banking"]
+    connectors: ["main_db"]
+    temperature: 0.0
+    cache_ttl: 10
+
+    system_prompt: |
+      You are a banking transaction history API backed by a SQL database.
+
+      Tables:
+        - accounts (id, account_number, holder_name, email, account_type, balance, currency, status, created_at)
+        - transactions (id, from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
+
+      Based on query parameters, return transaction history.
+
+      Supported query parameters:
+        - account_id: show transactions where account is sender OR receiver
+          → WHERE from_account_id = <account_id> OR to_account_id = <account_id>
+        - type: filter by type ("transfer", "deposit", "withdrawal")
+          → WHERE type = '<type>'
+        - status: filter by status ("completed", "pending", "failed")
+          → WHERE status = '<status>'
+        - min_amount: minimum amount filter  → WHERE amount >= <min_amount>
+        - max_amount: maximum amount filter → WHERE amount <= <max_amount>
+        - sort: "newest" (default), "oldest", "amount_desc", "amount_asc"
+        - limit: max results (default 50, max 200)
+        - offset: pagination offset
+
+      IMPORTANT:
+        - When NO limit is specified, use LIMIT 50 (not a lower number).
+        - Apply ALL provided filters in the WHERE clause.
+        - For min_amount/max_amount, use the `amount` column directly.
+        - Always ORDER BY created_at DESC unless a sort parameter says otherwise.
+
+      Return:
+        - "transactions": array of transaction objects
+        - "total": total count matching filters
+
+    schema:
+      input_params:
+        - name: account_id
+          type: integer
+          required: false
+          description: "Filter by account (as sender or receiver)"
+        - name: type
+          type: string
+          required: false
+          enum: ["transfer", "deposit", "withdrawal"]
+        - name: status
+          type: string
+          required: false
+          enum: ["completed", "pending", "failed"]
+        - name: min_amount
+          type: number
+          required: false
+        - name: max_amount
+          type: number
+          required: false
+        - name: sort
+          type: string
+          required: false
+          enum: ["newest", "oldest", "amount_desc", "amount_asc"]
+        - name: limit
+          type: integer
+          required: false
+        - name: offset
+          type: integer
+          required: false
+
+  # ── 5. Deposit money into an account ──────────────────────────────────
+  - path: /api/accounts/{id}/deposit
+    method: POST
+    summary: "Deposit money into an account"
+    tags: ["banking"]
+    connectors: ["main_db"]
+    temperature: 0.0
+
+    system_prompt: |
+      You are a banking deposit API backed by a SQL database.
+
+      Tables:
+        - accounts (id, account_number, holder_name, email, account_type, balance, currency, status, created_at)
+        - transactions (id, from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
+
+      Process a deposit with these STRICT steps IN THIS EXACT ORDER.
+      CRITICAL: You MUST complete ALL validation steps BEFORE executing any
+      INSERT or UPDATE statements.  NEVER modify the database until every
+      check has passed.
+
+      STEP 1 — VALIDATE inputs (no SQL needed):
+        - amount must be a number greater than 0  (reject zero and negatives)
+        → If invalid, IMMEDIATELY return status 400 with error.
+          Do NOT execute any SQL queries at all.
+
+      STEP 2 — VALIDATE account (read-only SELECT only):
+        - Run: SELECT id, status, balance FROM accounts WHERE id = <account_id>
+        - Account must exist — if not found, return 400 "Account not found"
+        - Account must have status = 'active' — if frozen or closed, return 400 "Account is not active"
+        → If any check fails, STOP and return the error.  Do NOT proceed.
+
+      STEP 3 — EXECUTE deposit (only if ALL validations passed):
+        Run exactly TWO statements (no more, no less):
+        a. UPDATE accounts SET balance = balance + <amount> WHERE id = <account_id>
+        b. INSERT INTO transactions (from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
+           VALUES (NULL, <account_id>, <amount>, 'USD', 'deposit', <description or 'Cash deposit'>, 'completed', 'TXN-' || hex(randomblob(3)), datetime('now'))
+        Do NOT run any additional UPDATE or SET statements.
+
+      STEP 4 — Return with status 201:
+        - Query the new balance: SELECT balance FROM accounts WHERE id = <account_id>
+        - Return: {"transaction_id": <new_txn_id>, "account_id": <id>, "new_balance": <current balance>}
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          amount:
+            type: number
+            description: "Deposit amount (must be > 0)"
+          description:
+            type: string
+            description: "Optional deposit description"
+        required: ["amount"]
+
+  # ── 6. Financial analytics ────────────────────────────────────────────
+  - path: /api/analytics/summary
+    method: POST
+    summary: "AI-powered financial analytics"
+    tags: ["banking"]
+    connectors: ["main_db"]
+    temperature: 0.2
+
+    system_prompt: |
+      You are a banking analytics API backed by a SQL database.
+
+      Tables:
+        - accounts (id, account_number, holder_name, email, account_type, balance, currency, status, created_at)
+        - transactions (id, from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
+
+      The user will ask a natural language analytics question like:
+        - "What is the total balance across all accounts?"
+        - "Which account type has the highest average balance?"
+        - "Show me the transaction volume by type"
+        - "What are the largest transfers this month?"
+
+      Steps:
+        1. Understand the question
+        2. Write and execute the appropriate SQL query
+        3. Analyze the results
+        4. Return a structured response
+
+      Return:
+        - "query_used": the SQL query you ran
+        - "raw_data": the query results
+        - "analysis": natural language summary of findings
+
+    schema:
+      input_body:
+        type: object
+        properties:
+          question:
+            type: string
+            description: "Natural language analytics question"
+        required: ["question"]

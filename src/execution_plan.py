@@ -529,6 +529,153 @@ def extract_plan_from_trace(
     return plan
 
 
+def _try_detect_dynamic_list(processed_items: list) -> dict | None:
+    """Detect when list items all map to consecutive tool_result row indices.
+
+    This is a fallback detector that works on already-processed items.  The
+    primary detector ``_try_detect_dynamic_list_raw`` works on raw values
+    before processing and handles the common case where duplicate field
+    values across rows cause all items to map to the same row index.
+
+    Returns a compact ``tool_result_list`` template or ``None``.
+    """
+    if len(processed_items) < 2:
+        return None
+    for item in processed_items:
+        if not isinstance(item, dict) or "__source__" in item:
+            return None
+
+    first = processed_items[0]
+    if not first:
+        return None
+    step_idx: int | None = None
+    first_row: int | None = None
+    row_template: dict[str, str] = {}
+
+    for key, ref in first.items():
+        if not isinstance(ref, dict) or ref.get("__source__") != "tool_result":
+            return None
+        path: str = ref.get("__path__", "")
+        parts = path.split(".", 2)
+        if len(parts) < 3:
+            return None
+        try:
+            s, r = int(parts[0]), int(parts[1])
+        except (ValueError, TypeError):
+            return None
+        field = parts[2]
+        if step_idx is None:
+            step_idx, first_row = s, r
+        elif s != step_idx or r != first_row:
+            return None
+        row_template[key] = field
+
+    if step_idx is None or first_row is None:
+        return None
+
+    second = processed_items[1]
+    expected_row = first_row + 1
+    for key, ref in second.items():
+        if not isinstance(ref, dict) or ref.get("__source__") != "tool_result":
+            return None
+        path = ref.get("__path__", "")
+        parts = path.split(".", 2)
+        if len(parts) < 3:
+            return None
+        try:
+            s, r = int(parts[0]), int(parts[1])
+        except (ValueError, TypeError):
+            return None
+        if s != step_idx or r != expected_row:
+            return None
+
+    logger.debug(
+        "Detected dynamic list pattern (processed): step=%d, %d fields, %d items",
+        step_idx, len(row_template), len(processed_items),
+    )
+    return {
+        "__source__": "tool_result_list",
+        "__step__": step_idx,
+        "__row_template__": row_template,
+    }
+
+
+def _try_detect_dynamic_list_raw(
+    raw_items: list,
+    tool_results: list,
+) -> dict | None:
+    """Detect list-of-tool-result-rows directly from raw response values.
+
+    When multiple rows share the same value for a field (e.g. all accounts
+    have ``status='active'``), the per-item ``_find_in_tool_results`` maps
+    every item to row 0's path.  This function sidesteps that problem by
+    matching raw response items against raw tool-result rows using value
+    equality, preferring exact key matches.
+
+    Returns a ``tool_result_list`` template or ``None``.
+    """
+    if len(raw_items) < 2:
+        return None
+    if not all(isinstance(item, dict) for item in raw_items):
+        return None
+
+    for step_idx, step_result in enumerate(tool_results):
+        if not isinstance(step_result, list) or len(step_result) < 2:
+            continue
+        if not isinstance(step_result[0], dict):
+            continue
+
+        # Build field_map from first response item → first tool-result row
+        row = step_result[0]
+        field_map: dict[str, str] = {}
+        matched = True
+        for resp_key, resp_value in raw_items[0].items():
+            # Prefer exact key match, then any value match
+            if resp_key in row and _values_match(resp_value, row[resp_key]):
+                field_map[resp_key] = resp_key
+            else:
+                found = False
+                for row_key, row_value in row.items():
+                    if _values_match(resp_value, row_value):
+                        field_map[resp_key] = row_key
+                        found = True
+                        break
+                if not found:
+                    matched = False
+                    break
+
+        if not matched or not field_map:
+            continue
+
+        # Verify second item matches second tool-result row
+        if len(step_result) < 2:
+            continue
+        second_row = step_result[1]
+        if not isinstance(second_row, dict):
+            continue
+        second_ok = True
+        for resp_key, resp_value in raw_items[1].items():
+            row_key = field_map.get(resp_key)
+            if row_key is None or not _values_match(resp_value, second_row.get(row_key)):
+                second_ok = False
+                break
+
+        if not second_ok:
+            continue
+
+        logger.debug(
+            "Detected dynamic list pattern (raw): step=%d, %d fields, %d items",
+            step_idx, len(field_map), len(raw_items),
+        )
+        return {
+            "__source__": "tool_result_list",
+            "__step__": step_idx,
+            "__row_template__": field_map,
+        }
+
+    return None
+
+
 def _build_response_template(
     response: Any,
     input_data: dict,
@@ -556,6 +703,14 @@ def _build_response_template(
         if isinstance(obj, dict):
             return {k: _process(v, hint_key=k) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
+            # Primary detector: check RAW response values against raw
+            # tool-result rows.  This correctly handles duplicate values
+            # across rows (e.g. all rows have status='active') that would
+            # confuse the per-item _find_in_tool_results approach.
+            dyn_raw = _try_detect_dynamic_list_raw(list(obj), tool_results)
+            if dyn_raw is not None:
+                return dyn_raw
+
             processed = [_process(v, is_list_item=True) for v in obj]
             # If ALL items in the list are unmappable literals, the list was
             # LLM-generated content (e.g. "steps").  Mark it so the renderer
@@ -566,6 +721,11 @@ def _build_response_template(
                 for p in processed
             ):
                 return {"__source__": "omit"}
+            # Fallback detector: works on already-processed items when all
+            # fields have unique values per row (no duplicates across rows).
+            dyn = _try_detect_dynamic_list(processed)
+            if dyn is not None:
+                return dyn
             return processed
 
         # Leaf — try exact matches first (tool_result, then input)
@@ -735,6 +895,25 @@ def _render_template(
                 return template["__value__"]
             elif src == "omit":
                 return None  # Signal to parent to skip this key
+            elif src == "tool_result_list":
+                # Dynamic list: iterate over actual tool-result rows using
+                # a single row template, so the number of rendered items
+                # matches the real query result (not the cache-time count).
+                step = template["__step__"]
+                row_tmpl = template["__row_template__"]
+                raw = tool_results[step] if step < len(tool_results) else []
+                if not isinstance(raw, list):
+                    raw = [raw]
+                rendered_rows = []
+                for row in raw:
+                    rendered_item = {}
+                    for key, field_path in row_tmpl.items():
+                        val = _resolve_path(row, field_path) if field_path else row
+                        if val is not None:
+                            rendered_item[key] = val
+                    if rendered_item:
+                        rendered_rows.append(rendered_item)
+                return rendered_rows
             return None
         # Regular dict — recurse, but drop keys whose value resolved to _OMIT
         rendered = {}
