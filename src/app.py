@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from src.cache import ResponseCache
 from src.circuit_breaker import CircuitBreaker
 from src.connectors import ConnectorRegistry
+from src.execution_plan import PlanCache
 from src.models import AppConfig, ConnectorConfig
 from src.prompt_loader import load_all_prompts
 from src.router import create_router
@@ -77,12 +78,13 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
 connector_registry = ConnectorRegistry()
 response_cache: ResponseCache | None = None
 circuit_breaker: CircuitBreaker | None = None
+plan_cache: PlanCache | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
-    global response_cache, circuit_breaker
+    global response_cache, circuit_breaker, plan_cache
     config: AppConfig = app.state.config
 
     # Initialize response cache
@@ -111,6 +113,15 @@ async def lifespan(app: FastAPI):
             config.performance.llm_timeout,
         )
 
+    # Initialize execution plan cache
+    plan_cfg = config.performance.execution_plans
+    if plan_cfg.enabled:
+        plan_cache = PlanCache(max_plans=plan_cfg.max_plans)
+        logger.info(
+            "Execution plan cache enabled (max_plans=%d, ttl=%ds, max_errors=%d)",
+            plan_cfg.max_plans, plan_cfg.plan_ttl, plan_cfg.max_errors,
+        )
+
     # Connect all configured connectors
     for cc in config.connectors:
         try:
@@ -137,6 +148,7 @@ async def lifespan(app: FastAPI):
         cache=response_cache,
         circuit_breaker=circuit_breaker,
         perf_config=config.performance,
+        plan_cache=plan_cache,
     )
     app.include_router(api_router)
 
@@ -153,6 +165,8 @@ async def lifespan(app: FastAPI):
     await connector_registry.disconnect_all()
     if response_cache:
         await response_cache.clear()
+    if plan_cache:
+        await plan_cache.clear()
     logger.info("Catalyst shut down.")
 
 
@@ -202,6 +216,8 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
         }
         if response_cache:
             health_data["cache"] = response_cache.stats
+        if plan_cache:
+            health_data["plan_cache"] = plan_cache.stats
         if circuit_breaker:
             health_data["circuit_breaker"] = circuit_breaker.stats
         return health_data

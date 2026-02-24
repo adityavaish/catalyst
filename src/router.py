@@ -22,6 +22,7 @@ from src.cache import ResponseCache
 from src.circuit_breaker import CircuitBreaker
 from src.connectors import ConnectorRegistry
 from src.engine import process_request, process_request_streaming
+from src.execution_plan import PlanCache
 from src.models import (
     CatalystRequest,
     HttpMethod,
@@ -126,6 +127,7 @@ def create_router(
     cache: ResponseCache | None = None,
     circuit_breaker: CircuitBreaker | None = None,
     perf_config: PerformanceConfig | None = None,
+    plan_cache: PlanCache | None = None,
 ) -> APIRouter:
     """
     Build a FastAPI ``APIRouter`` with one route per ``PromptEndpoint``.
@@ -135,7 +137,7 @@ def create_router(
     for ep in endpoints:
         _register_endpoint(
             router, ep, llm_config, connector_registry,
-            cache, circuit_breaker, perf_config,
+            cache, circuit_breaker, perf_config, plan_cache,
         )
 
     return router
@@ -149,6 +151,7 @@ def _register_endpoint(
     cache: ResponseCache | None = None,
     circuit_breaker: CircuitBreaker | None = None,
     perf_config: PerformanceConfig | None = None,
+    plan_cache: PlanCache | None = None,
 ):
     """Register a single PromptEndpoint as a FastAPI route."""
     method = _fastapi_method(endpoint.method)
@@ -213,6 +216,7 @@ def _register_endpoint(
             cache=cache,
             circuit_breaker=circuit_breaker,
             perf_config=perf_config,
+            plan_cache=plan_cache,
         )
 
         response_body: dict[str, Any] = {"data": result.data}

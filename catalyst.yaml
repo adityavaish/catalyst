@@ -35,6 +35,12 @@ performance:
   circuit_breaker_threshold: 5       # consecutive failures before opening
   circuit_breaker_recovery: 30.0     # seconds before probing recovery
   llm_timeout: 60.0                  # per-call timeout in seconds
+  execution_plans:
+    enabled: true                    # cache LLM-generated execution plans
+    plan_ttl: 3600                   # seconds before a plan expires (0 = infinite)
+    max_plans: 500                   # max cached plans in memory
+    max_errors: 3                    # consecutive plan errors before invalidation
+    background_refresh: true         # proactively regenerate plans before expiry
 
 # ---------------------------------------------------------------------------
 # LLM Configuration

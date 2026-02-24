@@ -27,6 +27,7 @@ from jinja2 import Template
 from src.cache import ResponseCache
 from src.circuit_breaker import CircuitBreaker, CircuitOpenError
 from src.connectors import BaseConnector, ConnectorRegistry
+from src.execution_plan import ExecutionPlan, PlanCache, execute_plan, extract_plan_from_trace
 from src.models import (
     CatalystRequest,
     CatalystResponse,
@@ -408,29 +409,32 @@ async def process_request(
     cache: ResponseCache | None = None,
     circuit_breaker: CircuitBreaker | None = None,
     perf_config: PerformanceConfig | None = None,
+    plan_cache: PlanCache | None = None,
 ) -> CatalystResponse:
     """
     Process an incoming API request through the LLM.
 
     Optimized pipeline:
-      1. Check cache → return immediately if hit
-      2. Build messages (using pre-compiled system prompt)
-      3. Gather tool definitions from connectors
-      4. Run LLM through circuit breaker
-      5. Execute tool calls in parallel
-      6. Parse result, store in cache, return
+      1. Check response cache → return immediately if hit
+      2. Check execution plan cache → execute plan without LLM if hit
+      3. Build messages (using pre-compiled system prompt)
+      4. Gather tool definitions from connectors
+      5. Run LLM through circuit breaker
+      6. Execute tool calls in parallel
+      7. Parse result, extract plan, store in caches, return
     """
     start_time = time.monotonic()
     parallel_tools = perf_config.parallel_tool_calls if perf_config else True
+    plan_config = perf_config.execution_plans if perf_config else None
 
-    # ── 1. Cache check ──────────────────────────────────────────────────
+    # ── 1. Response cache check ─────────────────────────────────────────
+    input_data = {
+        "path_params": request.path_params,
+        "query_params": request.query_params,
+        "body": request.body,
+    }
     cache_key: str | None = None
     if cache and endpoint.cache_ttl > 0:
-        input_data = {
-            "path_params": request.path_params,
-            "query_params": request.query_params,
-            "body": request.body,
-        }
         cache_key = ResponseCache.make_key(endpoint.path, request.method.value, input_data)
         cached = await cache.get(cache_key)
         if cached is not None:
@@ -440,7 +444,45 @@ async def process_request(
             cached.meta["latency_ms"] = round(elapsed, 1)
             return cached
 
-    # ── 2. Build messages (pre-compiled system prompt) ──────────────────
+    # ── 2. Execution plan check ─────────────────────────────────────────
+    endpoint_key = f"{request.method.value}:{endpoint.path}"
+    active_connectors = connector_registry.get_many(endpoint.connectors)
+
+    if plan_cache and plan_config and plan_config.enabled and active_connectors:
+        plan = await plan_cache.get(endpoint_key, input_data=input_data)
+        if plan is not None:
+            try:
+                logger.info("Plan HIT for %s — executing without LLM", endpoint_key)
+                plan_response = await execute_plan(plan, input_data, active_connectors)
+                await plan_cache.record_execution()
+
+                result = CatalystResponse(
+                    status_code=plan_response.get("status_code", 200),
+                    data=plan_response.get("data", plan_response),
+                    error=plan_response.get("error"),
+                    meta=plan_response.get("meta", {}),
+                )
+                elapsed = (time.monotonic() - start_time) * 1000
+                result.meta["latency_ms"] = round(elapsed, 1)
+                result.meta["cached"] = False
+                result.meta["plan_executed"] = True
+                result.meta["plan_hit_count"] = plan.hit_count
+
+                # Also store in response cache
+                if cache and cache_key and endpoint.cache_ttl > 0 and result.status_code < 400:
+                    await cache.set(cache_key, result, ttl=endpoint.cache_ttl)
+
+                logger.info(
+                    "← %s %s → %d (%.0fms, plan execution, no LLM)",
+                    request.method.value, request.path, result.status_code, elapsed,
+                )
+                return result
+
+            except Exception as e:
+                logger.warning("Plan execution failed for %s: %s — falling back to LLM", endpoint_key, e)
+                await plan_cache.record_error(endpoint_key, input_data=input_data)
+
+    # ── 3. Build messages (pre-compiled system prompt) ──────────────────
     system_msg = precompile_system_prompt(endpoint)
     user_msg = _build_user_message(endpoint, request)
 
@@ -449,13 +491,14 @@ async def process_request(
         {"role": "user", "content": user_msg},
     ]
 
-    # ── 3. Gather tools ─────────────────────────────────────────────────
-    active_connectors = connector_registry.get_many(endpoint.connectors)
+    # ── 4. Gather tools ─────────────────────────────────────────────────
     tools: list[dict[str, Any]] = []
     for conn in active_connectors:
         tools.extend(conn.tool_definitions())
 
-    # ── 4. Completion loop with circuit breaker ─────────────────────────
+    # ── 5. Completion loop with circuit breaker ─────────────────────────
+    # Track tool results for plan extraction
+    all_tool_results_parsed: list[dict] = []
     message = None
     round_num = 0
     for round_num in range(MAX_TOOL_ROUNDS):
@@ -501,7 +544,7 @@ async def process_request(
         if not getattr(message, "tool_calls", None):
             break
 
-        # ── 5. Execute tool calls (parallel or serial) ──────────────────
+        # ── 6. Execute tool calls (parallel or serial) ──────────────────
         messages.append(message.model_dump())
 
         if parallel_tools and len(message.tool_calls) > 1:
@@ -518,6 +561,13 @@ async def process_request(
                 message.tool_calls, active_connectors,
             )
 
+        # Collect parsed tool results for plan extraction
+        for tr in tool_results:
+            try:
+                all_tool_results_parsed.append(json.loads(tr["content"]))
+            except (json.JSONDecodeError, KeyError):
+                all_tool_results_parsed.append({})
+
         messages.extend(tool_results)
     else:
         return CatalystResponse(
@@ -525,18 +575,49 @@ async def process_request(
             error="Max tool-calling rounds exceeded.",
         )
 
-    # ── 6. Parse and cache ──────────────────────────────────────────────
+    # ── 7. Parse, extract plan, cache  ──────────────────────────────────
     raw_content = message.content or "" if message else ""
     result = _parse_llm_response(raw_content, endpoint.response_format)
 
     elapsed = (time.monotonic() - start_time) * 1000
     result.meta["latency_ms"] = round(elapsed, 1)
     result.meta["cached"] = False
+    result.meta["plan_executed"] = False
 
-    # Store in cache if configured
+    # Store in response cache
     if cache and cache_key and endpoint.cache_ttl > 0 and result.status_code < 400:
         await cache.set(cache_key, result, ttl=endpoint.cache_ttl)
         logger.debug("Cached response for %s (ttl=%ds)", cache_key[:12], endpoint.cache_ttl)
+
+    # Extract and cache execution plan (async, non-blocking)
+    if (
+        plan_cache
+        and plan_config
+        and plan_config.enabled
+        and active_connectors
+        and all_tool_results_parsed
+        and result.status_code < 400
+    ):
+        try:
+            final_data = result.data if isinstance(result.data, dict) else {"data": result.data}
+            final_response = {
+                "status_code": result.status_code,
+                "data": final_data,
+            }
+            plan = extract_plan_from_trace(
+                endpoint_key=endpoint_key,
+                input_data=input_data,
+                messages=messages,
+                tool_results_raw=all_tool_results_parsed,
+                final_response=final_response,
+                ttl=plan_config.plan_ttl,
+                max_errors=plan_config.max_errors,
+            )
+            if plan:
+                await plan_cache.put(plan)
+                result.meta["plan_cached"] = True
+        except Exception:
+            logger.exception("Failed to extract execution plan for %s", endpoint_key)
 
     logger.info(
         "← %s %s → %d (%.0fms, %d tool rounds)",

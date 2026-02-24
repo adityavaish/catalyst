@@ -174,6 +174,15 @@ class CacheConfig(BaseModel):
     default_ttl: float = 300  # seconds
 
 
+class PlanConfig(BaseModel):
+    """Execution plan caching settings."""
+    enabled: bool = True
+    plan_ttl: float = 3600       # seconds before a plan expires (0 = infinite)
+    max_plans: int = 500         # max cached plans in memory
+    max_errors: int = 3          # consecutive errors before plan is invalidated
+    background_refresh: bool = True  # proactively regenerate plans before expiry
+
+
 class PerformanceConfig(BaseModel):
     """Performance tuning settings."""
     parallel_tool_calls: bool = True
@@ -181,6 +190,7 @@ class PerformanceConfig(BaseModel):
     circuit_breaker_threshold: int = 5
     circuit_breaker_recovery: float = 30.0
     llm_timeout: float = 60.0  # per-call timeout in seconds
+    execution_plans: PlanConfig = Field(default_factory=PlanConfig)
 
 
 class AppConfig(BaseModel):
