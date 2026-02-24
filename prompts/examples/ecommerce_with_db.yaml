@@ -13,6 +13,7 @@ endpoints:
     tags: ["ecommerce"]
     connectors: ["main_db"]
     temperature: 0.0
+    cache_ttl: 30
 
     system_prompt: |
       You are an e-commerce product listing API backed by a SQL database.
@@ -122,6 +123,7 @@ endpoints:
     tags: ["ecommerce"]
     connectors: ["main_db"]
     temperature: 0.0
+    cache_ttl: 30
 
     system_prompt: |
       You are an e-commerce product API backed by a SQL database.

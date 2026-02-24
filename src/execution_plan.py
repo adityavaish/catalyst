@@ -424,12 +424,16 @@ def extract_plan_from_trace(
         logger.debug("No tool calls in trace for %s — skipping plan extraction", endpoint_key)
         return None
 
-    # At least one argument must be dynamic (input or template) for reuse
+    # Check whether the plan has any dynamic (input/template) argument mappings.
     has_dynamic_mapping = any(
         any(a.source in (ValueSource.INPUT, ValueSource.TEMPLATE) for a in step.arguments)
         for step in steps
     )
-    if not has_dynamic_mapping:
+    # Allow all-literal "static" plans when the request had NO input at all.
+    # These replay the exact same tool calls every time — valid because the
+    # same empty input always produces the same result.
+    has_input = bool(input_leaves)
+    if not has_dynamic_mapping and has_input:
         logger.debug("No dynamic arguments for %s — skipping plan", endpoint_key)
         return None
 
@@ -605,7 +609,14 @@ async def execute_plan(
             except (json.JSONDecodeError, TypeError):
                 result = {"raw": result}
 
-        tool_results.append(result if isinstance(result, dict) else {"raw": result})
+        # Keep the result structure as-is (including lists) so it matches
+        # the paths built during plan extraction from tool_results_raw.
+        # Wrapping lists in {"raw": ...} would break template paths like
+        # "0.0.field" that expect list[index].field traversal.
+        if isinstance(result, (dict, list, tuple)):
+            tool_results.append(result)
+        else:
+            tool_results.append({"raw": result})
 
     # ── Render response template ────────────────────────────────────────
     response = _render_template(plan.response_template, input_data, tool_results)
