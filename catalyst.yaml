@@ -62,6 +62,11 @@ connectors:
   - name: math_eval
     type: math
 
+  # SQLite database for e-commerce demo
+  - name: main_db
+    type: sqlite
+    connection_string: "sqlite:///./data/catalyst.db"
+
 # Example connectors (uncomment as needed):
 #
 #   # -- PostgreSQL --
