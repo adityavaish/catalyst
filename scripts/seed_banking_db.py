@@ -26,7 +26,7 @@ CREATE TABLE accounts (
     holder_name     TEXT    NOT NULL,
     email           TEXT    NOT NULL,
     account_type    TEXT    NOT NULL CHECK(account_type IN ('checking', 'savings', 'business')),
-    balance         REAL    NOT NULL DEFAULT 0.00,
+    balance         REAL    NOT NULL DEFAULT 0.00 CHECK(balance >= 0),
     currency        TEXT    NOT NULL DEFAULT 'USD',
     status          TEXT    NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'frozen', 'closed')),
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -36,7 +36,7 @@ CREATE TABLE transactions (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     from_account_id   INTEGER,
     to_account_id     INTEGER,
-    amount            REAL    NOT NULL,
+    amount            REAL    NOT NULL CHECK(amount > 0),
     currency          TEXT    NOT NULL DEFAULT 'USD',
     type              TEXT    NOT NULL CHECK(type IN ('transfer', 'deposit', 'withdrawal')),
     description       TEXT,
@@ -46,7 +46,38 @@ CREATE TABLE transactions (
     FOREIGN KEY (from_account_id) REFERENCES accounts(id),
     FOREIGN KEY (to_account_id)   REFERENCES accounts(id)
 );
+
+-- Prevent any UPDATE/INSERT on frozen or closed accounts.
+-- This is the HARD guardrail: even if the LLM tries to modify a
+-- frozen/closed account, the database itself will reject it.
+CREATE TRIGGER prevent_frozen_account_update
+BEFORE UPDATE OF balance ON accounts
+WHEN NEW.balance != OLD.balance AND OLD.status != 'active'
+BEGIN
+    SELECT RAISE(ABORT, 'BANK_ERR: Cannot modify balance of a non-active account (frozen or closed)');
+END;
+
+-- Prevent deposits to non-active accounts via transactions table
+CREATE TRIGGER prevent_transaction_to_frozen
+BEFORE INSERT ON transactions
+WHEN NEW.to_account_id IS NOT NULL
+     AND (SELECT status FROM accounts WHERE id = NEW.to_account_id) != 'active'
+BEGIN
+    SELECT RAISE(ABORT, 'BANK_ERR: Cannot create transaction targeting a non-active account');
+END;
+
+-- Prevent transfers from non-active accounts via transactions table
+CREATE TRIGGER prevent_transaction_from_frozen
+BEFORE INSERT ON transactions
+WHEN NEW.from_account_id IS NOT NULL
+     AND (SELECT status FROM accounts WHERE id = NEW.from_account_id) != 'active'
+BEGIN
+    SELECT RAISE(ABORT, 'BANK_ERR: Cannot create transaction from a non-active account');
+END;
 """)
+
+# Enable foreign key enforcement
+cur.execute("PRAGMA foreign_keys = ON;")
 
 # ── Seed accounts ───────────────────────────────────────────────────────
 # 8 accounts across 3 types, various balances, 1 frozen, 1 closed

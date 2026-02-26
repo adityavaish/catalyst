@@ -11,6 +11,7 @@ Optimizations:
   - Pre-compiled system prompts (avoid rebuilding per-request)
   - Circuit breaker (fail fast when LLM is degraded)
   - SSE streaming support (deliver partial results to clients)
+  - SQL transaction wrapping (atomic multi-statement operations)
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from jinja2 import Template
 
 from src.cache import ResponseCache
 from src.circuit_breaker import CircuitBreaker, CircuitOpenError
-from src.connectors import BaseConnector, ConnectorRegistry
+from src.connectors import BaseConnector, ConnectorRegistry, SQLConnector
 from src.execution_plan import ExecutionPlan, PlanCache, execute_plan, extract_plan_from_trace
 from src.models import (
     CatalystRequest,
@@ -501,6 +502,16 @@ async def process_request(
     all_tool_results_parsed: list[dict] = []
     message = None
     round_num = 0
+
+    # Transaction wrapping: for write methods, wrap multi-statement DB
+    # operations in a transaction so CHECK-constraint violations roll
+    # back ALL mutations (no partial writes).
+    is_write_method = request.method.value.upper() in ("POST", "PUT", "PATCH", "DELETE")
+    sql_connectors = [c for c in active_connectors if isinstance(c, SQLConnector)]
+    use_txn = is_write_method and len(sql_connectors) > 0
+    txn_started = False
+    constraint_error: str | None = None
+
     for round_num in range(MAX_TOOL_ROUNDS):
         # Wrap LLM call with circuit breaker
         async def _do_llm_call():
@@ -547,7 +558,17 @@ async def process_request(
         # ── 6. Execute tool calls (parallel or serial) ──────────────────
         messages.append(message.model_dump())
 
-        if parallel_tools and len(message.tool_calls) > 1:
+        # Start transaction before the first write tool call
+        has_write = any(
+            tc.function.name.endswith("_execute")
+            for tc in message.tool_calls
+        )
+        if use_txn and has_write and not txn_started:
+            for sc in sql_connectors:
+                await sc.begin_transaction()
+            txn_started = True
+
+        if parallel_tools and len(message.tool_calls) > 1 and not txn_started:
             logger.info(
                 "Executing %d tool calls in parallel [round %d]",
                 len(message.tool_calls),
@@ -561,6 +582,52 @@ async def process_request(
                 message.tool_calls, active_connectors,
             )
 
+        # Check for database constraint violations in tool results
+        for tr in tool_results:
+            content = tr.get("content", "")
+            if "BANK_ERR:" in content or "CHECK constraint failed" in content:
+                constraint_error = content
+                break
+
+        # If a constraint was violated, rollback and return error
+        if constraint_error:
+            if txn_started:
+                for sc in sql_connectors:
+                    try:
+                        await sc.rollback_transaction()
+                    except Exception:
+                        pass  # transaction may already be dead after IntegrityError
+                txn_started = False
+            # Extract meaningful error message
+            err_msg = constraint_error
+            if "BANK_ERR:" in err_msg:
+                try:
+                    parsed_err = json.loads(err_msg)
+                    err_msg = parsed_err.get("error", err_msg)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                # Extract just the BANK_ERR message
+                if "BANK_ERR:" in err_msg:
+                    err_msg = err_msg.split("BANK_ERR:", 1)[1].strip().rstrip("'\"}")
+            elif "CHECK constraint failed" in err_msg:
+                if "balance" in err_msg.lower():
+                    err_msg = "Insufficient funds — balance cannot go below zero"
+                else:
+                    err_msg = "Database constraint violation"
+
+            elapsed = (time.monotonic() - start_time) * 1000
+            return CatalystResponse(
+                status_code=400,
+                data={"error": err_msg, "status_code": 400},
+                error=err_msg,
+                meta={
+                    "latency_ms": round(elapsed, 1),
+                    "cached": False,
+                    "plan_executed": False,
+                    "constraint_guard": True,
+                },
+            )
+
         # Collect parsed tool results for plan extraction
         for tr in tool_results:
             try:
@@ -570,10 +637,34 @@ async def process_request(
 
         messages.extend(tool_results)
     else:
+        # Max rounds exceeded — rollback any open transaction
+        if txn_started:
+            for sc in sql_connectors:
+                try:
+                    await sc.rollback_transaction()
+                except Exception:
+                    pass
         return CatalystResponse(
             status_code=500,
             error="Max tool-calling rounds exceeded.",
         )
+
+    # ── 6b. Commit transaction if one was started ─────────────────────
+    if txn_started:
+        try:
+            for sc in sql_connectors:
+                await sc.commit_transaction()
+        except Exception:
+            logger.exception("Transaction commit failed — rolling back")
+            for sc in sql_connectors:
+                try:
+                    await sc.rollback_transaction()
+                except Exception:
+                    pass
+            return CatalystResponse(
+                status_code=500,
+                error="Database commit failed",
+            )
 
     # ── 7. Parse, extract plan, cache  ──────────────────────────────────
     raw_content = message.content or "" if message else ""

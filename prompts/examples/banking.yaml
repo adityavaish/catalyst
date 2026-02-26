@@ -113,6 +113,19 @@ endpoints:
         - accounts (id, account_number, holder_name, email, account_type, balance, currency, status, created_at)
         - transactions (id, from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
 
+      DATABASE CONSTRAINTS (enforced by the database — violations raise errors):
+        - accounts.balance has CHECK(balance >= 0): UPDATE that would make balance negative WILL FAIL
+        - transactions.amount has CHECK(amount > 0): INSERT with non-positive amount WILL FAIL
+        - Trigger: any UPDATE to accounts.balance where status != 'active' raises
+          "BANK_ERR: Cannot modify balance of a non-active account"
+        - Trigger: any INSERT into transactions referencing a non-active account raises
+          "BANK_ERR: Cannot create transaction involving a non-active account"
+
+      If a tool call returns an error containing "BANK_ERR" or "CHECK constraint failed",
+      this means the database rejected the operation.  Return a 400 error with a clear
+      human-readable message based on the error.  Example: if balance CHECK fails,
+      say "Insufficient funds".
+
       Process a fund transfer with these STRICT steps IN THIS EXACT ORDER.
       CRITICAL: You MUST complete ALL validation steps BEFORE executing any
       INSERT or UPDATE statements.  NEVER modify the database until every
@@ -247,6 +260,18 @@ endpoints:
       Tables:
         - accounts (id, account_number, holder_name, email, account_type, balance, currency, status, created_at)
         - transactions (id, from_account_id, to_account_id, amount, currency, type, description, status, reference_number, created_at)
+
+      DATABASE CONSTRAINTS (enforced by the database — violations raise errors):
+        - accounts.balance has CHECK(balance >= 0): UPDATE that would make balance negative WILL FAIL
+        - transactions.amount has CHECK(amount > 0): INSERT with non-positive amount WILL FAIL
+        - Trigger: any UPDATE to accounts.balance where status != 'active' raises
+          "BANK_ERR: Cannot modify balance of a non-active account"
+        - Trigger: any INSERT into transactions referencing a non-active account raises
+          "BANK_ERR: Cannot create transaction involving a non-active account"
+
+      If a tool call returns an error containing "BANK_ERR" or "CHECK constraint failed",
+      this means the database rejected the operation.  Return a 400 error with a clear
+      human-readable message based on the error.
 
       Process a deposit with these STRICT steps IN THIS EXACT ORDER.
       CRITICAL: You MUST complete ALL validation steps BEFORE executing any

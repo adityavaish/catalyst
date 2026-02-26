@@ -60,11 +60,19 @@ class SQLConnector(BaseConnector):
     """
     Async SQL connector using ``databases`` + ``sqlalchemy`` core.
     Supports Postgres, MySQL, SQLite.
+
+    Transaction support:
+      Call ``begin_transaction()`` before a batch of operations and
+      ``commit_transaction()`` / ``rollback_transaction()`` afterwards.
+      While a transaction is active, all queries and executes run inside it,
+      so a CHECK-constraint violation on any statement rolls back the whole
+      batch.
     """
 
     def __init__(self, config: ConnectorConfig):
         super().__init__(config)
         self._db: Any = None
+        self._txn: Any = None  # active transaction handle
 
     async def connect(self):
         try:
@@ -80,15 +88,60 @@ class SQLConnector(BaseConnector):
         logger.info("SQL connector '%s' connected.", self.name)
 
     async def disconnect(self):
+        if self._txn:
+            try:
+                await self._txn.rollback()
+            except Exception:
+                pass
+            self._txn = None
         if self._db:
             await self._db.disconnect()
         await super().disconnect()
+
+    # ── Transaction management ──────────────────────────────────────────
+    # Uses the `databases` library Transaction API which properly scopes
+    # all subsequent execute/query calls to the transaction context.
+    # For SQLite (single connection), this is reliable and ensures
+    # constraint violations rollback the entire batch.
+
+    async def begin_transaction(self):
+        """Start a database transaction.  All subsequent query/execute calls
+        run inside this transaction until commit or rollback."""
+        if self._txn:
+            return  # already in a transaction
+        self._txn = self._db.transaction()
+        await self._txn.start()
+        logger.debug("SQL connector '%s': transaction started", self.name)
+
+    async def commit_transaction(self):
+        """Commit the current transaction."""
+        if self._txn:
+            try:
+                await self._txn.commit()
+                logger.debug("SQL connector '%s': transaction committed", self.name)
+            finally:
+                self._txn = None
+
+    async def rollback_transaction(self):
+        """Roll back the current transaction."""
+        if self._txn:
+            try:
+                await self._txn.rollback()
+                logger.debug("SQL connector '%s': transaction rolled back", self.name)
+            finally:
+                self._txn = None
+
+    # ── Core execute ────────────────────────────────────────────────────
 
     async def execute(self, action: str, **kwargs: Any) -> Any:
         """
         Actions:
           - query: run a SELECT and return rows as dicts
           - execute: run INSERT/UPDATE/DELETE and return affected rows
+
+        When a transaction is active (via BEGIN IMMEDIATE), all operations
+        go through the same SQLite connection so constraint violations
+        trigger a full rollback.
         """
         sql = kwargs.get("sql", "")
         values = kwargs.get("values", {})
