@@ -78,6 +78,65 @@ class ParamSpec(BaseModel):
     enum: list[str] | None = None
 
 
+# ---------------------------------------------------------------------------
+# Pre-LLM guards — validators & preconditions (YAML-driven, generic)
+# ---------------------------------------------------------------------------
+
+class InputValidator(BaseModel):
+    """A pure-input validation rule evaluated before the LLM is called.
+
+    The ``check`` field is a safe expression evaluated against the request
+    context (``body``, ``params``, ``path``).  If it evaluates to falsy the
+    request is rejected immediately with ``status`` and ``error``.
+
+    Example YAML::
+
+        validators:
+          - check: "body.amount > 0"
+            error: "Amount must be greater than 0"
+            status: 400
+    """
+    check: str = Field(..., description="Safe expression to evaluate (e.g. 'body.amount > 0')")
+    error: str = Field(..., description="Human-readable error message returned on failure")
+    status: int = Field(400, description="HTTP status code returned on failure")
+
+
+class PreconditionCheck(BaseModel):
+    """A single assertion evaluated against SQL query result rows."""
+    check: str = Field(..., description="Safe expression over 'rows' + request context")
+    error: str = Field(..., description="Human-readable error message")
+    status: int = Field(400, description="HTTP status code on failure")
+
+
+class Precondition(BaseModel):
+    """A SQL query + assertions run before the LLM.
+
+    The query uses named bind parameters (``:_p0``, ``:_p1``, …) whose
+    values are resolved from ``params`` via dotted context paths.
+
+    Example YAML::
+
+        preconditions:
+          - query: "SELECT id, status FROM accounts WHERE id = :_p0"
+            connector: main_db
+            params: { _p0: "path.id" }
+            checks:
+              - check: "len(rows) > 0"
+                error: "Account not found"
+                status: 404
+    """
+    query: str = Field(..., description="SQL SELECT with named bind parameters")
+    connector: str = Field(..., description="Connector name to execute the query against")
+    params: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of bind-param name → dotted context path (e.g. _p0: 'path.id')",
+    )
+    checks: list[PreconditionCheck] = Field(
+        default_factory=list,
+        description="Assertions evaluated against the query result rows",
+    )
+
+
 class EndpointSchema(BaseModel):
     """Input/output schema hints included in the prompt context."""
     input_params: list[ParamSpec] = Field(default_factory=list)
@@ -116,6 +175,16 @@ class PromptEndpoint(BaseModel):
     connectors: list[str] = Field(
         default_factory=list,
         description="Names of connectors this endpoint needs access to",
+    )
+
+    # Pre-LLM guards (generic, YAML-driven)
+    validators: list[InputValidator] = Field(
+        default_factory=list,
+        description="Pure input validation rules — checked before LLM, no DB access",
+    )
+    preconditions: list[Precondition] = Field(
+        default_factory=list,
+        description="SQL-backed assertions — checked before LLM, require DB",
     )
 
     # Performance

@@ -36,6 +36,7 @@ from src.models import (
     PerformanceConfig,
     PromptEndpoint,
 )
+from src.validators import evaluate_preconditions, evaluate_validators
 
 logger = logging.getLogger(__name__)
 
@@ -444,6 +445,30 @@ async def process_request(
             cached.meta["cached"] = True
             cached.meta["latency_ms"] = round(elapsed, 1)
             return cached
+
+    # ── 1b. Pre-LLM validators (pure input checks) ──────────────────
+    validator_fail = await evaluate_validators(endpoint, request)
+    if validator_fail is not None:
+        elapsed = (time.monotonic() - start_time) * 1000
+        validator_fail.meta["latency_ms"] = round(elapsed, 1)
+        logger.info(
+            "← %s %s → %d (%.0fms, validator rejected)",
+            request.method.value, request.path, validator_fail.status_code, elapsed,
+        )
+        return validator_fail
+
+    # ── 1c. Pre-LLM preconditions (SQL-backed assertions) ───────────────
+    precondition_fail = await evaluate_preconditions(
+        endpoint, request, connector_registry,
+    )
+    if precondition_fail is not None:
+        elapsed = (time.monotonic() - start_time) * 1000
+        precondition_fail.meta["latency_ms"] = round(elapsed, 1)
+        logger.info(
+            "← %s %s → %d (%.0fms, precondition rejected)",
+            request.method.value, request.path, precondition_fail.status_code, elapsed,
+        )
+        return precondition_fail
 
     # ── 2. Execution plan check ─────────────────────────────────────────
     endpoint_key = f"{request.method.value}:{endpoint.path}"

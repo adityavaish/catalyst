@@ -63,6 +63,7 @@ class TestResult:
     latency_ms: float = 0.0
     plan_hit: bool = False
     cached: bool = False
+    guarded: bool = False  # True when validator/precondition rejected pre-LLM
     db_only: bool = False  # True for direct-DB integrity checks (not API calls)
     detail: str = ""
 
@@ -78,6 +79,8 @@ class TestSuite:
         self.results.append(r)
         if r.db_only:
             source = "DB"
+        elif r.guarded:
+            source = "GUARD"
         else:
             source = "CACHE" if r.cached else ("PLAN" if r.plan_hit else "LLM")
         status = "PASS" if r.passed else "FAIL"
@@ -96,14 +99,15 @@ class TestSuite:
         api_results = [r for r in self.results if not r.db_only]
         db_results = [r for r in self.results if r.db_only]
         lats = [r.latency_ms for r in api_results if r.latency_ms > 0]
-        llm = sum(1 for r in api_results if not r.plan_hit and not r.cached)
+        llm = sum(1 for r in api_results if not r.plan_hit and not r.cached and not r.guarded)
         plan = sum(1 for r in api_results if r.plan_hit)
         cache = sum(1 for r in api_results if r.cached)
+        guard = sum(1 for r in api_results if r.guarded)
         db_count = len(db_results)
 
         print(f"\n{'=' * 80}")
         print(f"  RESULTS: {passed}/{total} passed, {failed} failed")
-        print(f"  API:     {llm} LLM | {plan} PLAN | {cache} CACHE  ({len(api_results)} API calls)")
+        print(f"  API:     {llm} LLM | {plan} PLAN | {guard} GUARD | {cache} CACHE  ({len(api_results)} API calls)")
         if db_count:
             print(f"  DB:      {db_count} direct integrity checks")
         if lats:
@@ -528,6 +532,7 @@ def test_deposit_frozen_account(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}, status={status}",
     ))
 
@@ -555,6 +560,7 @@ def test_deposit_negative_amount(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}, status={status}",
     ))
 
@@ -581,6 +587,7 @@ def test_deposit_zero_amount(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}, status={status}",
     ))
 
@@ -715,6 +722,7 @@ def test_transfer_insufficient_funds(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"attempted=${over_amount:.2f}, error={has_error}",
     ))
 
@@ -745,6 +753,7 @@ def test_transfer_to_self(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}",
     ))
 
@@ -775,6 +784,7 @@ def test_transfer_from_frozen(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}",
     ))
 
@@ -805,6 +815,7 @@ def test_transfer_to_closed(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}",
     ))
 
@@ -832,6 +843,7 @@ def test_transfer_negative_amount(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}",
     ))
 
@@ -862,6 +874,7 @@ def test_transfer_nonexistent_account(suite: TestSuite):
         latency_ms=meta.get("latency_ms", lat),
         plan_hit=meta.get("plan_executed", False),
         cached=meta.get("cached", False),
+        guarded=meta.get("validator_rejected", False) or meta.get("precondition_rejected", False),
         detail=f"error={has_error}",
     ))
 

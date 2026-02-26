@@ -156,6 +156,40 @@ endpoints:
         including the updated balances of both accounts via:
         SELECT balance FROM accounts WHERE id IN (<from_account_id>, <to_account_id>)
 
+    # ── Pre-LLM guards (generic, YAML-driven) ──
+    validators:
+      - check: "body.amount > 0"
+        error: "Transfer amount must be greater than 0"
+        status: 400
+      - check: "body.from_account_id != body.to_account_id"
+        error: "Cannot transfer to the same account"
+        status: 400
+
+    preconditions:
+      - query: "SELECT id, status, balance FROM accounts WHERE id = :_p0"
+        connector: main_db
+        params: { _p0: "body.from_account_id" }
+        checks:
+          - check: "len(rows) > 0"
+            error: "Source account not found"
+            status: 404
+          - check: "rows[0]['status'] == 'active'"
+            error: "Source account is not active"
+            status: 400
+          - check: "rows[0]['balance'] >= body.amount"
+            error: "Insufficient funds"
+            status: 400
+      - query: "SELECT id, status FROM accounts WHERE id = :_p0"
+        connector: main_db
+        params: { _p0: "body.to_account_id" }
+        checks:
+          - check: "len(rows) > 0"
+            error: "Destination account not found"
+            status: 404
+          - check: "rows[0]['status'] == 'active'"
+            error: "Destination account is not active"
+            status: 400
+
     schema:
       input_body:
         type: object
@@ -299,6 +333,24 @@ endpoints:
       STEP 4 — Return with status 201:
         - Query the new balance: SELECT balance FROM accounts WHERE id = <account_id>
         - Return: {"transaction_id": <new_txn_id>, "account_id": <id>, "new_balance": <current balance>}
+
+    # ── Pre-LLM guards (generic, YAML-driven) ──
+    validators:
+      - check: "body.amount > 0"
+        error: "Deposit amount must be greater than 0"
+        status: 400
+
+    preconditions:
+      - query: "SELECT id, status FROM accounts WHERE id = :_p0"
+        connector: main_db
+        params: { _p0: "path.id" }
+        checks:
+          - check: "len(rows) > 0"
+            error: "Account not found"
+            status: 404
+          - check: "rows[0]['status'] == 'active'"
+            error: "Account is not active"
+            status: 400
 
     schema:
       input_body:
