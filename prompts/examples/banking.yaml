@@ -319,6 +319,7 @@ endpoints:
     tags: ["banking"]
     connectors: ["main_db"]
     temperature: 0.2
+    plan_cache_enabled: false  # NL→SQL: question drives SQL shape, not cacheable
 
     system_prompt: |
       You are a banking analytics API backed by a SQL database.

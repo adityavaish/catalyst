@@ -120,6 +120,7 @@ class PromptEndpoint(BaseModel):
 
     # Performance
     cache_ttl: float = 0  # seconds, 0 = no caching
+    plan_cache_enabled: bool = True  # set False to skip plan caching for this endpoint
     streaming: bool = False  # enable SSE streaming
 
     # Middleware / guards

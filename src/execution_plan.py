@@ -115,7 +115,10 @@ class PlanCache:
         """Build the variant key using known discriminator fields."""
         disc_fields = self._discriminator_index.get(endpoint_key)
         if not disc_fields or not input_data:
-            return endpoint_key
+            # Include the set of present input parameter names so that
+            # plans for different query-param combinations coexist instead
+            # of overwriting each other.
+            return _param_aware_key(endpoint_key, input_data)
         return build_variant_key(endpoint_key, input_data, disc_fields)
 
     async def get(self, endpoint_key: str, input_data: dict | None = None) -> ExecutionPlan | None:
@@ -155,19 +158,38 @@ class PlanCache:
 
     @staticmethod
     def _plan_covers_input(plan: ExecutionPlan, input_data: dict) -> bool:
-        """Return True if the plan accounts for every leaf in *input_data*."""
+        """Return True if the plan accounts for every leaf in *input_data*
+        AND the request provides every input the plan requires.
+
+        This is a *bidirectional* check:
+          - Forward:  request leaves ⊆ plan known paths
+          - Reverse:  plan required inputs ⊆ request leaves
+        The reverse check prevents attempting plan execution when the
+        request is missing optional fields the plan needs (e.g.
+        body.description), which would otherwise cause a ValueError
+        and accumulate spurious error counts.
+        """
         request_leaves = set(_collect_leaf_values(input_data).keys())
         if not request_leaves:
             return True
         # Gather all input paths the plan references
         known_paths: set[str] = set(plan.discriminator_fields or [])
+        required_paths: set[str] = set()  # paths the plan NEEDS from the request
         for step in plan.steps:
             for arg in step.arguments:
                 if arg.source == ValueSource.INPUT and arg.source_path:
                     known_paths.add(arg.source_path)
+                    required_paths.add(arg.source_path)
                 if arg.source == ValueSource.TEMPLATE and arg.template_inputs:
                     known_paths.update(arg.template_inputs.values())
-        return request_leaves <= known_paths
+                    required_paths.update(arg.template_inputs.values())
+        # Forward: request must not have unknown params
+        if not request_leaves <= known_paths:
+            return False
+        # Reverse: plan's required inputs must be present in the request
+        if not required_paths <= request_leaves:
+            return False
+        return True
 
     async def put(self, plan: ExecutionPlan) -> None:
         async with self._lock:
@@ -381,6 +403,21 @@ def _try_build_template(
     return None
 
 
+def _param_aware_key(endpoint_key: str, input_data: dict | None) -> str:
+    """Build a variant key that includes the *set* of input parameter names.
+
+    This allows plans for different query-param combinations to coexist
+    (e.g. ``?account_type=`` vs ``?status=``) rather than overwriting
+    each other under the same bare endpoint_key.
+    """
+    if not input_data:
+        return endpoint_key
+    leaves = sorted(_collect_leaf_values(input_data).keys())
+    if not leaves:
+        return endpoint_key
+    return f"{endpoint_key}||{'|'.join(leaves)}"
+
+
 def build_variant_key(
     endpoint_key: str,
     input_data: dict,
@@ -505,7 +542,11 @@ def extract_plan_from_trace(
     all_input_paths = set(input_leaves.keys())
     discriminator_fields = sorted(all_input_paths - used_input_paths)
 
-    variant_key = build_variant_key(endpoint_key, input_data, discriminator_fields)
+    if discriminator_fields:
+        variant_key = build_variant_key(endpoint_key, input_data, discriminator_fields)
+    else:
+        # Use param-aware key so different param combinations coexist
+        variant_key = _param_aware_key(endpoint_key, input_data)
 
     # ── Build response template ─────────────────────────────────────────
     response_template = _build_response_template(final_response, input_data, tool_results_raw)

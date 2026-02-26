@@ -63,6 +63,7 @@ class TestResult:
     latency_ms: float = 0.0
     plan_hit: bool = False
     cached: bool = False
+    db_only: bool = False  # True for direct-DB integrity checks (not API calls)
     detail: str = ""
 
 
@@ -75,7 +76,10 @@ class TestSuite:
 
     def record(self, r: TestResult):
         self.results.append(r)
-        source = "CACHE" if r.cached else ("PLAN" if r.plan_hit else "LLM")
+        if r.db_only:
+            source = "DB"
+        else:
+            source = "CACHE" if r.cached else ("PLAN" if r.plan_hit else "LLM")
         status = "PASS" if r.passed else "FAIL"
         print(f"  [{status}] {r.name:<62s} {r.latency_ms:>8.1f}ms  [{source}]  ({r.detail})")
 
@@ -89,14 +93,19 @@ class TestSuite:
         total = len(self.results)
         passed = sum(1 for r in self.results if r.passed)
         failed = total - passed
-        lats = [r.latency_ms for r in self.results if r.latency_ms > 0]
-        llm = sum(1 for r in self.results if not r.plan_hit and not r.cached)
-        plan = sum(1 for r in self.results if r.plan_hit)
-        cache = sum(1 for r in self.results if r.cached)
+        api_results = [r for r in self.results if not r.db_only]
+        db_results = [r for r in self.results if r.db_only]
+        lats = [r.latency_ms for r in api_results if r.latency_ms > 0]
+        llm = sum(1 for r in api_results if not r.plan_hit and not r.cached)
+        plan = sum(1 for r in api_results if r.plan_hit)
+        cache = sum(1 for r in api_results if r.cached)
+        db_count = len(db_results)
 
         print(f"\n{'=' * 80}")
         print(f"  RESULTS: {passed}/{total} passed, {failed} failed")
-        print(f"  SOURCE:  {llm} LLM | {plan} PLAN | {cache} CACHE")
+        print(f"  API:     {llm} LLM | {plan} PLAN | {cache} CACHE  ({len(api_results)} API calls)")
+        if db_count:
+            print(f"  DB:      {db_count} direct integrity checks")
         if lats:
             print(f"  LATENCY: min={min(lats):.1f}ms  avg={sum(lats)/len(lats):.1f}ms  max={max(lats):.1f}ms")
         print(f"{'=' * 80}")
@@ -1152,6 +1161,7 @@ def test_balance_integrity_alice(suite: TestSuite):
         name="INTEGRITY: Alice's balance after operations",
         passed=ok,
         latency_ms=0,
+        db_only=True,
         detail=f"actual=${actual}, txn_expected=${txn_expected}, drift=${abs(float(actual or 0) - (txn_expected or 0)):.2f}",
     ))
 
@@ -1166,6 +1176,7 @@ def test_balance_integrity_charlie(suite: TestSuite):
         name="INTEGRITY: Charlie's balance after transfer in",
         passed=ok,
         latency_ms=0,
+        db_only=True,
         detail=f"actual=${actual}, txn_expected=${txn_expected}, drift=${abs(float(actual or 0) - (txn_expected or 0)):.2f}",
     ))
 
@@ -1180,6 +1191,7 @@ def test_balance_integrity_eve(suite: TestSuite):
         name="INTEGRITY: Eve's balance after $10k deposit",
         passed=ok,
         latency_ms=0,
+        db_only=True,
         detail=f"actual=${actual}, txn_expected=${txn_expected}, drift=${abs(float(actual or 0) - (txn_expected or 0)):.2f}",
     ))
 
@@ -1194,6 +1206,7 @@ def test_balance_integrity_diana(suite: TestSuite):
         name="INTEGRITY: Diana's balance after $5k transfer out",
         passed=ok,
         latency_ms=0,
+        db_only=True,
         detail=f"actual=${actual}, txn_expected=${txn_expected}, drift=${abs(float(actual or 0) - (txn_expected or 0)):.2f}",
     ))
 
@@ -1208,6 +1221,7 @@ def test_balance_integrity_bob(suite: TestSuite):
         name="INTEGRITY: Bob's balance after $5k transfer in",
         passed=ok,
         latency_ms=0,
+        db_only=True,
         detail=f"actual=${actual}, txn_expected=${txn_expected}, drift=${abs(float(actual or 0) - (txn_expected or 0)):.2f}",
     ))
 
@@ -1222,6 +1236,7 @@ def test_frozen_balance_unchanged(suite: TestSuite):
         name="INTEGRITY: Frozen account balance unchanged",
         passed=ok,
         latency_ms=0,
+        db_only=True,
         detail=f"actual=${actual}, expected=${expected:.2f}, drift=${abs(float(actual or 0) - expected):.2f}",
     ))
 

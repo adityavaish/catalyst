@@ -449,7 +449,7 @@ async def process_request(
     endpoint_key = f"{request.method.value}:{endpoint.path}"
     active_connectors = connector_registry.get_many(endpoint.connectors)
 
-    if plan_cache and plan_config and plan_config.enabled and active_connectors:
+    if plan_cache and plan_config and plan_config.enabled and active_connectors and endpoint.plan_cache_enabled:
         plan = await plan_cache.get(endpoint_key, input_data=input_data)
         if plan is not None:
             try:
@@ -458,7 +458,7 @@ async def process_request(
                 await plan_cache.record_execution()
 
                 result = CatalystResponse(
-                    status_code=plan_response.get("status_code", 200),
+                    status_code=200,  # plans are only extracted from successful requests
                     data=plan_response.get("data", plan_response),
                     error=plan_response.get("error"),
                     meta=plan_response.get("meta", {}),
@@ -685,14 +685,17 @@ async def process_request(
         plan_cache
         and plan_config
         and plan_config.enabled
+        and endpoint.plan_cache_enabled
         and active_connectors
         and all_tool_results_parsed
         and result.status_code < 400
     ):
         try:
             final_data = result.data if isinstance(result.data, dict) else {"data": result.data}
+            # Only pass 'data' to the response template — status_code is a
+            # framework field and must NOT be matched against tool-result
+            # values (e.g. amount=200 ≠ HTTP 200).
             final_response = {
-                "status_code": result.status_code,
                 "data": final_data,
             }
             plan = extract_plan_from_trace(
